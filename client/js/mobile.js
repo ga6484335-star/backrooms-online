@@ -113,6 +113,12 @@ export class MobileControls {
       this.onEmote('dance');
     }, { passive: false });
 
+    const fb = document.getElementById('mb-flash');
+    fb.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      if (this.onFlash) { this.onFlash(); fb.classList.toggle('on'); }
+    }, { passive: false });
+
     document.getElementById('mb-menu').addEventListener('touchstart', (e) => {
       e.preventDefault();
       this.onMenu();

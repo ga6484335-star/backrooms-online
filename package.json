@@ -9,9 +9,16 @@
     "test": "node test/multiplayer.test.js",
     "test:browser": "node test/browser.test.js",
     "test:2p": "node test/browser2p.test.js",
-    "test:all": "node test/multiplayer.test.js && node test/browser.test.js && node test/browser2p.test.js"
+    "test:all": "node test/multiplayer.test.js && node test/worldgen.test.mjs && node test/browser.test.js && node test/browser2p.test.js",
+    "test:world": "node test/worldgen.test.mjs"
   },
-  "keywords": ["backrooms", "horror", "multiplayer", "threejs", "websocket"],
+  "keywords": [
+    "backrooms",
+    "horror",
+    "multiplayer",
+    "threejs",
+    "websocket"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {

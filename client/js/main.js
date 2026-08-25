@@ -16,6 +16,7 @@ import { HorrorEvents } from './monsters/index.js';
 import { Network } from './network.js';
 import { MobileControls } from './mobile.js';
 import { MenuUI } from './menu.js';
+import { Flashlight } from './flashlight.js';
 import { noteText } from './notes.js';
 import { getLevel, nextLevelFrom } from './levels.js';
 import { rngFrom, hashStr } from './rng.js';
@@ -44,6 +45,10 @@ let settings = null;
 let startTime = 0;
 let doorStates = new Map(); // "cx,cz,dir" -> {open:boolean}
 let noteOverlayOpen = false;
+let flash = null;
+let dead = false;           // local player death state
+let respawnT = 0;           // seconds until respawn allowed
+let spectateIdx = 0;
 
 const E = (id) => document.getElementById(id);
 
@@ -158,15 +163,26 @@ net.on('ev', (m) => {
     case 'chunkmorph': if (worldMgr) worldMgr.applyMorph(m.data); break;
     case 'lightdie': if (lightMgr) lightMgr.killFixture(m.data.key); break;
     case 'door': doorStates.set(m.data.key, { open: m.data.open }); break;
+    case 'battpickup': if (worldMgr) worldMgr.removeInteractable(m.data.id); break;
     case 'noclip': levelTransition(m.data.level); break;
     case 'caught': {
-      // someone was caught — if it was us, respawn handled locally via onCaught
+      // someone was caught — if it was us, death flow runs locally via onCaught
       if (m.data.pid === -1 || m.data.pid === net.id) {
-        localCaught();
+        localDeath();
       } else {
         flashText(`${net.players.get(m.data.pid)?.name || 'SOMEONE'} IS GONE`);
-        audio.monsterVoice('runner', player.pos.x + 6, 1.5, player.pos.z, 0.8);
+        audio.monsterAttack(player.pos.x + 6, 1.5, player.pos.z);
       }
+      break;
+    }
+    case 'died': {
+      if (m.data.pid !== net.id) {
+        flashText(`${net.players.get(m.data.pid)?.name || 'SOMEONE'} — SIGNAL LOST`);
+      }
+      break;
+    }
+    case 'respawn': {
+      if (m.data.pid !== net.id) flashText(`${net.players.get(m.data.pid)?.name || 'SOMEONE'} IS BACK`);
       break;
     }
     default:
@@ -191,9 +207,17 @@ function startGame(seed, level) {
   worldMgr = new WorldManager(scene, world, settings.quality);
   lightMgr = new LightManager(scene, settings.quality);
   monsters = new MonsterSystem(scene, world, worldMgr, audio, net, () => isHost);
+  monsters.getLightAt = (x, z) => lightMgr.brightnessAt(x, z);
   events = new HorrorEvents(world, worldMgr, audio, engine, net);
   events.setHostFn(() => isHost);
+  events.setLightMgr(lightMgr);
   events.onMessage = flashText;
+
+  // flashlight
+  if (flash) { scene.remove(flash.spot); scene.remove(flash.fill); }
+  flash = new Flashlight(camera, scene, audio, settings.quality);
+  dead = false;
+  respawnT = 0;
 
   monsters.onNearCallback = (m, d) => {
     player.trauma(Math.max(0, 1 - d / 6) * 0.4);
@@ -201,7 +225,7 @@ function startGame(seed, level) {
   };
   monsters.onCaught = (m, p) => {
     net.sendEvent('caught', { pid: p.id });
-    if (p.id === -1) localCaught();
+    if (p.id === -1) localDeath();
   };
 
   // remote player avatars
@@ -234,7 +258,10 @@ function startGame(seed, level) {
   updatePlayersHud();
 
   if (player.mobile) {
-    if (!mobile) mobile = new MobileControls(player, doInteract, doEmote, togglePause);
+    if (!mobile) {
+      mobile = new MobileControls(player, doInteract, doEmote, togglePause);
+      mobile.onFlash = () => { if (!dead && flash) flash.toggle(); };
+    }
     mobile.show();
   } else {
     canvas.requestPointerLock?.().catch?.(() => {});
@@ -248,20 +275,44 @@ function startGame(seed, level) {
   audio.distantMetal(0.4);
 }
 
-function localCaught() {
-  // found-footage death: glitch hard, blackout, respawn at start
-  engine.bumpGlitch(2.5);
+function localDeath() {
+  if (dead) return;
+  dead = true;
+  player.dead = true;
+  player.enabled = false;
+  if (flash && flash.on) flash.setOn(false);
+  net.sendEvent('died', { pid: net.id });
+  // found-footage death: glitch hard, blackout, spectator / respawn
+  engine.bumpGlitch(3.5);
   player.trauma(1);
-  audio.monsterVoice('runner', player.pos.x, 1.5, player.pos.z, 1);
+  audio.monsterAttack(player.pos.x, 1.5, player.pos.z);
+  audio.heartbeat(1);
   const fade = E('fade');
-  fade.style.transition = 'opacity 0.15s ease';
+  fade.style.transition = 'opacity 0.12s ease';
   fade.classList.remove('clear');
+  respawnT = 6;
   setTimeout(() => {
-    const [sx, sz] = world.spawnPoint(0);
-    player.teleport(sx, sz);
-    fade.style.transition = 'opacity 2.5s ease';
-    fade.classList.add('clear');
-  }, 900);
+    if (gameState !== 'playing') return;
+    E('death-overlay').classList.remove('hidden');
+    E('death-sub').textContent = remotePlayers.players.size
+      ? 'SPECTATING — [R] RESPAWN IN 6s'
+      : 'RESPAWN IN 6s — [R]';
+  }, 700);
+}
+
+function respawn() {
+  dead = false;
+  player.dead = false;
+  const [sx, sz] = world.spawnPoint(0);
+  player.teleport(sx, sz);
+  player.enabled = true;
+  player.trauma(0.4);
+  if (flash) flash.battery = Math.max(flash.battery, 30); // mercy charge
+  net.sendEvent('respawn', { pid: net.id });
+  E('death-overlay').classList.add('hidden');
+  const fade = E('fade');
+  fade.style.transition = 'opacity 2.2s ease';
+  fade.classList.add('clear');
 }
 
 function levelTransition(level) {
@@ -292,11 +343,17 @@ function findInteractable() {
 }
 
 function doInteract() {
+  if (dead) return;
   if (noteOverlayOpen) { closeNote(); return; }
   const it = currentInteract;
   if (!it) return;
   if (it.type === 'note') {
     openNote(it.data);
+  } else if (it.type === 'battery') {
+    flash.addBattery();
+    worldMgr.removeInteractable(it.data.id);
+    net.sendEvent('battpickup', { id: it.data.id }); // other clients remove it too
+    flashText('BATTERY FOUND');
   } else if (it.type === 'door') {
     const key = `${it.data.cx},${it.data.cz},${it.data.dir}`;
     const st = doorStates.get(key) || { open: false };
@@ -350,6 +407,8 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyE') doInteract();
   if (e.code === 'Escape') togglePause();
   if (e.code === 'KeyQ') doEmote('wave');
+  if (e.code === 'KeyF' && !dead && flash) flash.toggle();
+  if (e.code === 'KeyR' && dead && respawnT <= 0) respawn();
 });
 canvas.addEventListener('click', () => {
   if (gameState === 'playing' && !player.mobile && !document.pointerLockElement) {
@@ -385,6 +444,33 @@ function formatTime(ms) {
   const ss = String(s % 60).padStart(2, '0');
   const ff = String(((ms % 1000) / 40) | 0).padStart(2, '0');
   return `00:${mm}:${ss}:${ff}`;
+}
+
+// battery HUD — camcorder-style segmented indicator, only when relevant
+function updateBatteryHud() {
+  const el = E('cc-batt');
+  if (!flash) { el.textContent = ''; return; }
+  if (!flash.on && flash.battery > 99) { el.textContent = ''; return; } // pristine & off: hide
+  const segs = Math.round(flash.battery / 25);
+  el.textContent = '▮'.repeat(segs) + '▯'.repeat(4 - segs);
+  el.classList.toggle('low', flash.battery < 25);
+}
+
+// spectator camera: hover near the next living teammate (found-footage style)
+function spectateCamera(dt) {
+  const alive = [...remotePlayers.players.values()].filter((p) => !p.cur.dead);
+  if (!alive.length) {
+    // no one left: slow orbit over death spot
+    const t = performance.now() * 0.0002;
+    camera.position.set(player.pos.x + Math.cos(t) * 3, 3.2, player.pos.z + Math.sin(t) * 3);
+    camera.lookAt(player.pos.x, 0.5, player.pos.z);
+    return;
+  }
+  const spec = alive[spectateIdx % alive.length];
+  const t = performance.now() * 0.001;
+  const ox = Math.cos(t * 0.3) * 2.2, oz = Math.sin(t * 0.3) * 2.2;
+  camera.position.lerp(new THREE.Vector3(spec.cur.x + ox, 2.1, spec.cur.z + oz), Math.min(1, dt * 3));
+  camera.lookAt(spec.cur.x, 1.3, spec.cur.z);
 }
 
 // ---------------------------------------------------------------------------
@@ -441,10 +527,23 @@ function loop() {
 
   if (gameState !== 'playing' || !world) return;
 
-  player.update(dt, world, worldMgr);
+  if (!dead) {
+    player.update(dt, world, worldMgr);
+  } else {
+    // dead: spectate nearest living teammate, or float at death spot
+    spectateCamera(dt);
+    if (respawnT > 0) {
+      respawnT -= dt;
+      if (respawnT <= 0) E('death-sub').textContent = 'PRESS [R] TO RESPAWN';
+      else E('death-sub').textContent = `RESPAWN IN ${Math.ceil(respawnT)}s`;
+    }
+  }
+  player.flashOn = flash && flash.on ? 1 : 0;
   worldMgr.ensure(player.pos.x, player.pos.z);
   registerChunkLights();
   lightMgr.update(dt, player.pos.x, player.pos.z, camera);
+  if (flash) flash.update(dt);
+  updateBatteryHud();
   remotePlayers.update(dt, camera.position);
   monsters.update(dt, player, remotePlayers, null);
   events.update(dt, player);
@@ -463,15 +562,18 @@ function loop() {
   player._sendAcc = (player._sendAcc || 0) + dt;
   if (net.connected && player._sendAcc > 0.05) {
     player._sendAcc = 0;
-    net.sendState(player.pos.x, player.pos.y, player.pos.z, player.yaw, player.pitch, player.anim, player.emote);
+    net.sendState(player.pos.x, player.pos.y, player.pos.z, player.yaw, player.pitch, player.anim, player.emote, player.flashOn, dead);
   }
 
   // interact prompt
-  currentInteract = findInteractable();
+  currentInteract = dead ? null : findInteractable();
   const prompt = E('interact-prompt');
   if (currentInteract && !noteOverlayOpen) {
     prompt.classList.remove('hidden');
-    E('interact-text').textContent = currentInteract.type === 'note' ? 'READ NOTE' : 'OPEN DOOR';
+    E('interact-text').textContent =
+      currentInteract.type === 'note' ? 'READ NOTE'
+      : currentInteract.type === 'battery' ? 'TAKE BATTERY'
+      : 'OPEN DOOR';
   } else {
     prompt.classList.add('hidden');
   }

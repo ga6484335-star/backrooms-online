@@ -94,6 +94,8 @@ wss.on('connection', (ws) => {
         if (Array.isArray(r) && r.length === 2 && r.every(Number.isFinite)) player.rot = r;
         if (typeof msg.a === 'string') player.anim = msg.a.slice(0, 16);
         if (typeof msg.e === 'string') player.emote = msg.e.slice(0, 16);
+        if (msg.fl === 0 || msg.fl === 1) player.fl = msg.fl;
+        if (msg.d === 0 || msg.d === 1) player.dead = !!msg.d;
         break;
       }
       case 'emote': {
@@ -105,6 +107,8 @@ wss.on('connection', (ws) => {
       case 'ev': {
         if (!room || !player) break;
         const kind = String(msg.kind || '').slice(0, 24);
+        if (kind === 'died') player.dead = true;
+        if (kind === 'respawn') player.dead = false;
         room.relayEvent(player.id, kind, msg.data, msg.target);
         break;
       }

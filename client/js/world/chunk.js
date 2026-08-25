@@ -37,7 +37,7 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
       const cell = world.cellAt(cx, cz);
       const wx = cx * CELL;
       const wz = cz * CELL;
-      const tint = cell.tint;
+      const tint = cell.tint * (1 - (cell.damage || 0) * 0.35);
 
       // floor
       const floorCol = cell.water ? [20, 40, 38] : levelDef.palette.floor;
@@ -45,12 +45,21 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
         [[wx, 0, wz], [wx + CELL, 0, wz], [wx + CELL, 0, wz + CELL], [wx, 0, wz + CELL]],
         [0, 1, 0], scaleColor(floorCol, tint), [[0, 0], [1, 0], [1, 1], [0, 1]]);
 
-      // ceiling
+      // ceiling (damaged cells sometimes get a missing/darker ceiling patch)
       const ceilY = cell.ceilH;
       const ceilCol = scaleColor(levelDef.palette.ceil, tint * (cell.light ? 1 : 0.55));
       gb.quad(
         [[wx, ceilY, wz], [wx + CELL, ceilY, wz], [wx + CELL, ceilY, wz + CELL], [wx, ceilY, wz + CELL]],
         [0, -1, 0], ceilCol, [[0, 0], [1, 0], [1, 1], [0, 1]]);
+
+      // lowered soffit beam across the cell (dropped ceiling section)
+      if (cell.ceilDrop > 0) {
+        const sy = ceilY - cell.ceilDrop;
+        const scol = scaleColor(levelDef.palette.ceil, tint * 0.8);
+        const alongX = chance(cell.propRng, 0.5);
+        if (alongX) gb.box(CELL, cell.ceilDrop, 1.1, wx + CELL / 2, sy, wz + CELL / 2, scol);
+        else gb.box(1.1, cell.ceilDrop, CELL, wx + CELL / 2, sy, wz + CELL / 2, scol);
+      }
 
       // walls (dirs 0 and 1 only to avoid duplicates)
       for (let dir = 0; dir < 2; dir++) {
@@ -87,30 +96,94 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
         }
       }
 
+      // narrow corridor squeeze: thicken existing wall edges inward
+      if (cell.narrow > 0) {
+        const inset = Math.min(1.0, cell.narrow);
+        const ncol = scaleColor(levelDef.palette.wall, tint * 0.9);
+        const w0 = world.wallInfo(cx, cz, 0), w2 = world.wallInfo(cx, cz, 2);
+        const w1 = world.wallInfo(cx, cz, 1), w3 = world.wallInfo(cx, cz, 3);
+        const anyWall = w0.wall || w1.wall || w2.wall || w3.wall;
+        const squeeze = (dir) => { // only squeeze solid non-door walls
+          const w = [w0, w1, w2, w3][dir];
+          return w.wall && !w.door;
+        };
+        if (anyWall) {
+          if (squeeze(0)) { gb.box(inset, ceilY, CELL, wx + CELL - inset / 2, 0, wz + CELL / 2, ncol); colliders.push({ x: wx + CELL - inset / 2, z: wz + CELL / 2, hw: inset / 2, hd: CELL / 2 }); }
+          if (squeeze(2)) { gb.box(inset, ceilY, CELL, wx + inset / 2, 0, wz + CELL / 2, ncol); colliders.push({ x: wx + inset / 2, z: wz + CELL / 2, hw: inset / 2, hd: CELL / 2 }); }
+          if (squeeze(1)) { gb.box(CELL, ceilY, inset, wx + CELL / 2, 0, wz + CELL - inset / 2, ncol); colliders.push({ x: wx + CELL / 2, z: wz + CELL - inset / 2, hw: CELL / 2, hd: inset / 2 }); }
+          if (squeeze(3)) { gb.box(CELL, ceilY, inset, wx + CELL / 2, 0, wz + inset / 2, ncol); colliders.push({ x: wx + CELL / 2, z: wz + inset / 2, hw: CELL / 2, hd: inset / 2 }); }
+        } else {
+          // open area squeezed into a slot anyway — claustrophobic pinch
+          const alongX = chance(cell.propRng, 0.5);
+          if (alongX) {
+            gb.box(CELL, ceilY, inset, wx + CELL / 2, 0, wz + inset / 2, ncol);
+            gb.box(CELL, ceilY, inset, wx + CELL / 2, 0, wz + CELL - inset / 2, ncol);
+            colliders.push({ x: wx + CELL / 2, z: wz + inset / 2, hw: CELL / 2, hd: inset / 2 });
+            colliders.push({ x: wx + CELL / 2, z: wz + CELL - inset / 2, hw: CELL / 2, hd: inset / 2 });
+          } else {
+            gb.box(inset, ceilY, CELL, wx + inset / 2, 0, wz + CELL / 2, ncol);
+            gb.box(inset, ceilY, CELL, wx + CELL - inset / 2, 0, wz + CELL / 2, ncol);
+            colliders.push({ x: wx + inset / 2, z: wz + CELL / 2, hw: inset / 2, hd: CELL / 2 });
+            colliders.push({ x: wx + CELL - inset / 2, z: wz + CELL / 2, hw: inset / 2, hd: CELL / 2 });
+          }
+        }
+      }
+
       // pillars
       if (cell.pillar) {
         const px = wx + 2, pz = wz + 2;
         const prng = rngFrom(hashStr(seed, `l${level}:pillar:${cx},${cz}`));
         const psize = range(prng, 0.4, 0.9);
         const pcol = scaleColor(levelDef.palette.wall, tint * 0.75);
-        gb.box(psize, ceilY, psize, px, 0, pz, pcol);
+        if (cell.pillarShape === 1) {
+          gb.cylinder(psize * 0.55, ceilY, px, 0, pz, pcol);
+        } else if (cell.pillarShape === 2) {
+          gb.box(psize, ceilY, psize * 0.4, px, 0, pz, pcol);
+          gb.box(psize * 0.4, ceilY, psize, px, 0, pz, pcol);
+        } else {
+          gb.box(psize, ceilY, psize, px, 0, pz, pcol);
+        }
         colliders.push({ x: px, z: pz, r: psize * 0.7 });
       }
 
-      // light fixtures
+      // light fixtures — panel / tube / hanging bulb styles
       if (cell.light) {
         const lr = rngFrom(hashStr(seed, `l${level}:light:${cx},${cz}`));
         const lx = wx + 2 + (lr() - 0.5) * 1.4;
         const lz = wz + 2 + (lr() - 0.5) * 1.4;
-        gbEmiss.box(1.2, 0.08, 0.4, lx, ceilY - 0.02, lz, [255, 250, 226]);
+        const ly = ceilY - (cell.ceilDrop > 0 ? cell.ceilDrop : 0) - 0.02;
+        if (cell.lightStyle === 'tube') {
+          gbEmiss.box(1.9, 0.06, 0.14, lx, ly, lz, [255, 250, 226], chance(lr, 0.5) ? Math.PI / 2 : 0);
+        } else if (cell.lightStyle === 'bulb') {
+          gb.box(0.03, 0.35, 0.03, lx, ly - 0.35, lz, [30, 30, 32]);
+          gbEmiss.box(0.16, 0.16, 0.16, lx, ly - 0.45, lz, [255, 244, 214]);
+        } else {
+          gbEmiss.box(1.2, 0.08, 0.4, lx, ly, lz, [255, 250, 226]);
+        }
         lights.push({
-          cx, cz, x: lx, z: lz, y: ceilY - 0.06,
+          cx, cz, x: lx, z: lz, y: (cell.lightStyle === 'bulb' ? ly - 0.5 : ly) - 0.04,
           color: levelDef.palette.lightColor,
-          intensity: levelDef.palette.lightI,
-          distance: levelDef.palette.lightDist,
+          intensity: levelDef.palette.lightI * (cell.lightStyle === 'bulb' ? 0.55 : 1),
+          distance: levelDef.palette.lightDist * (cell.lightStyle === 'bulb' ? 0.8 : 1),
           flickerSeed: hashStr(seed, `l${level}:flicker:${cx},${cz}`),
           special: cell.special,
         });
+      }
+
+      // damage debris: fallen panels, rubble
+      if (cell.damage > 0.45 && chance(cell.propRng, 0.5)) {
+        const drng = cell.propRng;
+        const dx = wx + range(drng, 0.8, CELL - 0.8), dz = wz + range(drng, 0.8, CELL - 0.8);
+        PROP_BUILDERS.rubble(makeShiftBuilder(gb, dx, dz, drng() * 3), drng);
+        if (chance(drng, 0.4)) PROP_BUILDERS.tippedchair(makeShiftBuilder(gb, wx + range(drng, 1, 3), wz + range(drng, 1, 3), drng() * 3), drng);
+      }
+
+      // battery pickup
+      if (cell.batterySpawn) {
+        const bx = wx + 2 + (cell.propRng() - 0.5) * 2;
+        const bz = wz + 2 + (cell.propRng() - 0.5) * 2;
+        PROP_BUILDERS.battery(makeShiftBuilder(gb, bx, bz, 0), cell.propRng);
+        notes.push({ x: bx, z: bz, id: `batt:${cx},${cz}`, battery: true });
       }
 
       // water surface
@@ -195,7 +268,8 @@ function pushProps(world, cell, gb, colliders, notes, quality) {
   const rng = cell.propRng;
   const levelDef = world.def;
   if (!levelDef.props.length) return;
-  const count = (quality === 'low' ? 1 : 2) + intRange(rng, 0, 2);
+  let count = ((quality === 'low' ? 1 : 2) + intRange(rng, 0, 2)) * (cell.propBoost || 1);
+  count = Math.min(9, Math.round(count));
   for (let i = 0; i < count; i++) {
     const k = levelDef.props[intRange(rng, 0, levelDef.props.length - 1)];
     const builder = PROP_BUILDERS[k];
@@ -254,6 +328,104 @@ function pushSpecial(world, cell, gb, colliders, specials) {
     case 'lightsdie': {
       if (chance(sr, 0.35)) {
         gb.box(0.8, 0.06, 0.3, cell.cx * CELL + 2, cell.ceilH - 0.05, cell.cz * CELL + 2, [140, 140, 146]);
+      }
+      break;
+    }
+    case 'circularroom': {
+      // circular floor inlay + central column
+      const cxm = (s.x + s.w / 2) * CELL, czm = (s.z + s.h / 2) * CELL;
+      const r = Math.min(s.w, s.h) * CELL * 0.5;
+      if (Math.hypot(cell.cx * CELL + 2 - cxm, cell.cz * CELL + 2 - czm) < 2.2) {
+        gb.cylinder(0.55, cell.ceilH, cxm, 0, czm, scaleColor(world.def.palette.wall, cell.tint * 0.8));
+        colliders.push({ x: cxm, z: czm, r: 0.75 });
+      }
+      if (chance(sr, 0.5)) {
+        gb.cylinder(r * 0.55, 0.02, cxm, 0.005, czm, scaleColor(world.def.palette.floor, 0.6));
+      }
+      break;
+    }
+    case 'longcorridor': {
+      // overhead pipes running the length of the corridor
+      const horiz = s.w >= s.h;
+      const cy = cell.ceilH - 0.35;
+      if (horiz) gb.box(CELL, 0.12, 0.12, cell.cx * CELL + 2, cy, cell.cz * CELL + 2, [70, 74, 78]);
+      else gb.box(0.12, 0.12, CELL, cell.cx * CELL + 2, cy, cell.cz * CELL + 2, [70, 74, 78]);
+      break;
+    }
+    case 'furniturepile': {
+      // stacked abandoned furniture
+      if (chance(sr, 0.8)) {
+        const px = cell.cx * CELL + range(sr, 1, CELL - 1), pz = cell.cz * CELL + range(sr, 1, CELL - 1);
+        const b = makeShiftBuilder(gb, px, pz, sr() * 3);
+        PROP_BUILDERS.chair(b, sr);
+        if (chance(sr, 0.6)) PROP_BUILDERS.tippedchair(makeShiftBuilder(gb, px + (sr() - 0.5), pz + (sr() - 0.5), sr() * 3), sr);
+        colliders.push({ x: px, z: pz, r: 0.45 });
+      }
+      break;
+    }
+    case 'monitorroom': {
+      if (chance(sr, 0.75)) {
+        const px = cell.cx * CELL + range(sr, 0.8, CELL - 0.8), pz = cell.cz * CELL + range(sr, 0.8, CELL - 0.8);
+        PROP_BUILDERS.monitorstack(makeShiftBuilder(gb, px, pz, sr() * 3), sr);
+        colliders.push({ x: px, z: pz, r: 0.42 });
+      }
+      break;
+    }
+    case 'ventroom': {
+      if (chance(sr, 0.7)) {
+        PROP_BUILDERS.ventduct(makeShiftBuilder(gb, cell.cx * CELL + 2, cell.cz * CELL + 2, sr() * 1.6), sr);
+      }
+      break;
+    }
+    case 'elevator': {
+      // broken elevator on the room's far wall, once per special
+      const isAnchor = cell.cx === s.x + (s.w >> 1) && cell.cz === s.z + (s.h >> 1);
+      if (isAnchor) {
+        const bx = (s.x + s.w / 2) * CELL, bz = (s.z + s.h / 2) * CELL;
+        const off = (Math.min(s.w, s.h) * CELL) / 2 - 1.0;
+        const dx = [0, 1, 0, -1][s.doorSide], dz = [1, 0, -1, 0][s.doorSide];
+        PROP_BUILDERS.elevatorframe(makeShiftBuilder(gb, bx - dx * off, bz - dz * off, Math.atan2(dx, dz)), sr);
+        colliders.push({ x: bx - dx * off, z: bz - dz * off, hw: 0.9, hd: 0.9 });
+      }
+      break;
+    }
+    case 'clockroom': {
+      const isAnchor = cell.cx === s.x + (s.w >> 1) && cell.cz === s.z + (s.h >> 1);
+      if (isAnchor) {
+        const bx = (s.x + s.w / 2) * CELL, bz = (s.z + s.h / 2) * CELL;
+        const off = (Math.min(s.w, s.h) * CELL) / 2 - 0.8;
+        const dx = [0, 1, 0, -1][s.doorSide], dz = [1, 0, -1, 0][s.doorSide];
+        PROP_BUILDERS.bigclock(makeShiftBuilder(gb, bx - dx * off, bz - dz * off, Math.atan2(dx, dz) + Math.PI), sr);
+      }
+      break;
+    }
+    case 'statue': {
+      const isAnchor = cell.cx === s.x + (s.w >> 1) && cell.cz === s.z + (s.h >> 1);
+      if (isAnchor) {
+        const bx = (s.x + s.w / 2) * CELL, bz = (s.z + s.h / 2) * CELL;
+        PROP_BUILDERS.statue(makeShiftBuilder(gb, bx, bz, sr() * 3), sr);
+        colliders.push({ x: bx, z: bz, r: 0.65 });
+      }
+      break;
+    }
+    case 'reddoor': {
+      const isAnchor = cell.cx === s.x + (s.w >> 1) && cell.cz === s.z + (s.h >> 1);
+      if (isAnchor) {
+        const bx = (s.x + s.w / 2) * CELL, bz = (s.z + s.h / 2) * CELL;
+        const off = (Math.min(s.w, s.h) * CELL) / 2 - 0.7;
+        const dx = [0, 1, 0, -1][s.doorSide], dz = [1, 0, -1, 0][s.doorSide];
+        const b = makeShiftBuilder(gb, bx - dx * off, bz - dz * off, Math.atan2(dx, dz));
+        b.box(1.0, 2.1, 0.08, 0, 1.05, 0, [150, 30, 26]);
+        b.box(0.12, 0.05, 0.12, 0.32, 1.0, 0.08, [180, 170, 150]);
+        colliders.push({ x: bx - dx * off, z: bz - dz * off, hw: 0.7, hd: 0.7 });
+      }
+      break;
+    }
+    case 'officefloor': {
+      if (chance(sr, 0.55)) {
+        const px = cell.cx * CELL + range(sr, 1, CELL - 1), pz = cell.cz * CELL + range(sr, 1, CELL - 1);
+        PROP_BUILDERS.cubicle(makeShiftBuilder(gb, px, pz, (sr() * 4 | 0) * Math.PI / 2), sr);
+        colliders.push({ x: px, z: pz, r: 1.0 });
       }
       break;
     }
@@ -367,7 +539,7 @@ export class WorldManager {
     for (const chunk of this.chunks.values()) {
       for (const n of chunk.notes) {
         const d = Math.hypot(n.x - px, n.z - pz);
-        if (d < bestD) { best = { type: 'note', data: n, dist: d }; bestD = d; }
+        if (d < bestD) { best = { type: n.battery ? 'battery' : 'note', data: n, dist: d }; bestD = d; }
       }
       for (const d of chunk.doors) {
         const dd = Math.hypot(d.x - px, d.z - pz);
@@ -375,6 +547,14 @@ export class WorldManager {
       }
     }
     return best;
+  }
+
+  removeInteractable(id) {
+    for (const chunk of this.chunks.values()) {
+      const i = chunk.notes.findIndex((n) => n.id === id);
+      if (i >= 0) { chunk.notes.splice(i, 1); return true; }
+    }
+    return false;
   }
 
   monstersSpawnCell(px, pz) {

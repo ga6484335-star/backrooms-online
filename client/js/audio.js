@@ -310,4 +310,95 @@ export class AudioEngine {
     src.connect(f).connect(g).connect(this.master);
     src.start(t, Math.random(), 0.25);
   }
+
+  // ---------- flashlight / pickups / death ----------
+  click() {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const s = ctx.createBufferSource(); s.buffer = this._noiseBuf;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 2600; f.Q.value = 4;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.28, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.045);
+    s.connect(f).connect(g).connect(this.master);
+    s.start(t, 0.01, 0.06);
+  }
+
+  batteryPickup() {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    for (const [f0, dt] of [[660, 0], [990, 0.07]]) {
+      const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = f0;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t + dt);
+      g.gain.exponentialRampToValueAtTime(0.1, t + dt + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.001, t + dt + 0.14);
+      o.connect(g).connect(this.master);
+      o.start(t + dt); o.stop(t + dt + 0.16);
+    }
+  }
+
+  distantScream(intensity = 1) {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const p = this.panner((Math.random() - 0.5) * 40, 1.5, -30 - Math.random() * 20, 12);
+    const o = ctx.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(720, t);
+    o.frequency.exponentialRampToValueAtTime(380, t + 1.1);
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.setValueAtTime(900, t); f.Q.value = 2.2;
+    f.frequency.exponentialRampToValueAtTime(500, t + 1.1);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.11 * intensity, t + 0.18);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.3);
+    const v = ctx.createOscillator(); v.frequency.value = 9;
+    const vg = ctx.createGain(); vg.gain.value = 22;
+    v.connect(vg).connect(o.frequency);
+    o.connect(f).connect(g).connect(p);
+    o.start(t); o.stop(t + 1.4); v.start(t); v.stop(t + 1.4);
+  }
+
+  distantFootsteps(count = 4) {
+    if (!this.ensure()) return;
+    let dt = 0;
+    const px = (Math.random() - 0.5) * 30, pz = -18 - Math.random() * 14;
+    for (let i = 0; i < count; i++) {
+      this._thumpAt(px + i * 0.7, pz, 0.05, 90 + Math.random() * 30, dt);
+      dt += 0.5 + Math.random() * 0.25;
+    }
+  }
+
+  _thumpAt(x, z, vol, freq, delay) {
+    const ctx = this.ctx, t = ctx.currentTime + delay;
+    const p = this.panner(x, 0.3, z, 8);
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(freq, t);
+    o.frequency.exponentialRampToValueAtTime(freq * 0.5, t + 0.09);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+    o.connect(g).connect(p);
+    o.start(t); o.stop(t + 0.16);
+  }
+
+  monsterAttack(x, y, z) {
+    // loud in-your-face screech for the kill moment
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const p = this.panner(x, y, z, 2);
+    const s = ctx.createBufferSource(); s.buffer = this._noiseBuf; s.loop = true;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 1.2;
+    f.frequency.setValueAtTime(2400, t);
+    f.frequency.exponentialRampToValueAtTime(600, t + 0.7);
+    const o = ctx.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(180, t);
+    o.frequency.exponentialRampToValueAtTime(60, t + 0.8);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.6, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+    s.connect(f).connect(g); o.connect(g);
+    g.connect(p);
+    s.start(t); s.stop(t + 0.9); o.start(t); o.stop(t + 0.9);
+  }
 }

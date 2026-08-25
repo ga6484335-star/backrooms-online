@@ -119,6 +119,22 @@ body {
 .cc-sp { color: var(--amber); }
 .cc-bottom { position: absolute; bottom: max(12px, env(safe-area-inset-bottom)); left: 18px; right: 18px; display: flex; gap: 18px; font-size: 13px; letter-spacing: 2px; }
 #cc-batt { margin-left: auto; color: #ddd; letter-spacing: 1px; }
+#cc-batt.low { color: #ff5a4a; animation: blink 0.8s steps(2) infinite; }
+
+#death-overlay {
+  position: fixed; inset: 0; z-index: 55;
+  display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(ellipse at center, rgba(20,0,0,0.55), rgba(0,0,0,0.92));
+  pointer-events: none;
+}
+.death-inner { text-align: center; }
+.death-title {
+  font-size: clamp(28px, 6vw, 54px); letter-spacing: 0.5em; color: #b33;
+  text-shadow: 0 0 24px rgba(180, 40, 30, 0.5);
+  animation: blink 1.6s steps(2) infinite;
+}
+#death-sub { margin-top: 14px; font-size: 13px; letter-spacing: 0.3em; color: #998; }
+@keyframes blink { 50% { opacity: 0.35; } }
 #cc-room { color: #9a917a; }
 #crosshair {
   position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px;

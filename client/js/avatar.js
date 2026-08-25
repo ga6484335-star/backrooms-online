@@ -31,6 +31,15 @@ export function makeAvatar(color, name) {
 
   for (const k of Object.keys(parts)) if (k !== 'camera') g.add(parts[k]);
 
+  // flashlight cone attached to the camcorder
+  const fl = new THREE.SpotLight(0xfff2d8, 0, 22, 0.5, 0.6, 1.5);
+  fl.position.set(0, 1.55, 0.2);
+  const flTarget = new THREE.Object3D();
+  flTarget.position.set(0, 1.4, 8);
+  g.add(fl, flTarget);
+  fl.target = flTarget;
+  parts.flashlight = fl;
+
   // nametag sprite
   const tag = makeNameTag(name, color);
   tag.position.y = 2.05;
@@ -158,12 +167,13 @@ export class RemotePlayers {
 
   applyState(list, selfId) {
     for (const row of list) {
-      const [id, x, y, z, yaw, pitch, anim, emote] = row;
+      const [id, x, y, z, yaw, pitch, anim, emote, fl, dead] = row;
       if (id === selfId) continue;
       const p = this.players.get(id);
       if (!p) continue;
       p.tgt.x = x; p.tgt.y = y; p.tgt.z = z; p.tgt.yaw = yaw; p.tgt.pitch = pitch;
       p.anim = anim; p.emote = emote;
+      p.cur.fl = fl; p.cur.dead = !!dead;
       p.lastSeen = performance.now();
     }
   }
@@ -184,6 +194,16 @@ export class RemotePlayers {
       p.av.group.rotation.y = p.cur.yaw + Math.PI;
       p.av.parts.head.rotation.x = -p.cur.pitch * 0.7;
       animateAvatar(p.av, dt, p.anim, p.emote);
+
+      // remote flashlight beam
+      const fl = p.av.parts.flashlight;
+      if (fl) {
+        fl.intensity = p.cur.fl ? 18 : 0;
+        // aim where the head points (pitch)
+        fl.target.position.set(0, 1.4 - Math.sin(p.cur.pitch) * 6, 8 * Math.cos(p.cur.pitch));
+      }
+      // dead players lie on the floor
+      p.av.group.rotation.x = p.cur.dead ? -Math.PI / 2 * 0.9 : 0;
 
       // positional footsteps for others
       if (p.anim !== 'idle') {

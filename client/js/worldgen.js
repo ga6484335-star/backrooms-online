@@ -14,19 +14,32 @@ export const REGION_CELLS = 16;   // special-room regions are 16x16 cells
 // ---- special room archetypes with rarity tiers ----
 export const SPECIALS = {
   // common
-  darkroom:    { tier: 'common', min: 3, max: 5, w: 0.22 },
-  highceiling: { tier: 'common', min: 3, max: 5, w: 0.18 },
-  pillarmaze:  { tier: 'common', min: 4, max: 6, w: 0.14 },
-  flooded:     { tier: 'common', min: 3, max: 5, w: 0.12 },
+  darkroom:    { tier: 'common', min: 3, max: 5, w: 0.16 },
+  highceiling: { tier: 'common', min: 3, max: 5, w: 0.13 },
+  pillarmaze:  { tier: 'common', min: 4, max: 6, w: 0.10 },
+  flooded:     { tier: 'common', min: 3, max: 5, w: 0.09 },
+  deadend:     { tier: 'common', min: 2, max: 3,  w: 0.08 },
+  officefloor: { tier: 'common', min: 4, max: 6, w: 0.10 },
   // rare
-  massivehall: { tier: 'rare',   min: 6, max: 10, w: 0.07 },
-  loopcorridor:{ tier: 'rare',   min: 5, max: 7,  w: 0.06 },
-  staircase:   { tier: 'rare',   min: 3, max: 4,  w: 0.05 },
-  lightsdie:   { tier: 'rare',   min: 4, max: 6,  w: 0.05 },
-  // extremely rare
-  impossible:  { tier: 'ultra',  min: 5, max: 8,  w: 0.025 },
-  noclipdoor:  { tier: 'ultra',  min: 1, max: 1,  w: 0.018 },
-  deadend:     { tier: 'common', min: 2, max: 3,  w: 0.10 },
+  massivehall: { tier: 'rare',   min: 6, max: 10, w: 0.045 },
+  loopcorridor:{ tier: 'rare',   min: 5, max: 7,  w: 0.04 },
+  staircase:   { tier: 'rare',   min: 3, max: 4,  w: 0.035 },
+  lightsdie:   { tier: 'rare',   min: 4, max: 6,  w: 0.035 },
+  circularroom:{ tier: 'rare',   min: 5, max: 8,  w: 0.03 },
+  longcorridor:{ tier: 'rare',   min: 8, max: 13, w: 0.03 },
+  furniturepile:{ tier: 'rare',  min: 4, max: 6,  w: 0.03 },
+  monolith:    { tier: 'rare',   min: 5, max: 7,  w: 0.025 },
+  monitorroom: { tier: 'rare',   min: 4, max: 6,  w: 0.025 },
+  ventroom:    { tier: 'rare',   min: 4, max: 6,  w: 0.02 },
+  doormaze:    { tier: 'rare',   min: 4, max: 6,  w: 0.02 },
+  // extremely rare landmarks — players should feel lucky to find these
+  whiteroom:   { tier: 'ultra',  min: 4, max: 6,  w: 0.012 },
+  impossible:  { tier: 'ultra',  min: 5, max: 8,  w: 0.014 },
+  elevator:    { tier: 'ultra',  min: 3, max: 4,  w: 0.010 },
+  clockroom:   { tier: 'ultra',  min: 4, max: 5,  w: 0.008 },
+  statue:      { tier: 'ultra',  min: 3, max: 4,  w: 0.007 },
+  reddoor:     { tier: 'ultra',  min: 2, max: 3,  w: 0.007 },
+  noclipdoor:  { tier: 'ultra',  min: 1, max: 1,  w: 0.012 },
 };
 
 const REGION_SPECIAL_PROB = 0.34;
@@ -82,10 +95,31 @@ export class WorldModel {
       }
     }
     // open halls: whole region mostly wall-free (iconic Level 0 open spaces)
-    const openHall = special ? (special.type === 'massivehall') : chance(rng, this.def.openHall);
-    const out = { special, openHall };
+    const openHall = special ? (special.type === 'massivehall' || special.type === 'circularroom') : chance(rng, this.def.openHall);
+
+    // ---- district: a sub-theme for this whole region so distant areas feel
+    // genuinely different (palette shift, wall density, props, damage, light)
+    const drng = rngFrom(hashStr(this.seed, `l${this.level}:district:${rx},${rz}`));
+    const dtable = this.def.districts || [];
+    let district = null;
+    if (dtable.length) {
+      const roll = drng();
+      let acc = 0;
+      for (const d of dtable) {
+        acc += d.w;
+        if (roll < acc) { district = d; break; }
+      }
+      if (!district) district = dtable[dtable.length - 1];
+    }
+
+    const out = { special, openHall, district };
     this.regionCache.set(key, out);
     return out;
+  }
+
+  districtAt(cx, cz) {
+    const rx = Math.floor(cx / REGION_CELLS), rz = Math.floor(cz / REGION_CELLS);
+    return this.regionAt(rx, rz).district;
   }
 
   specialAt(cx, cz) {
@@ -112,14 +146,43 @@ export class WorldModel {
     const special = this.specialAt(cx, cz);
     const rng = rngFrom(hashStr(this.seed, `l${this.level}:cell:${cx},${cz}`));
     const openHall = this.isOpenHallCell(cx, cz);
+    const district = this.districtAt(cx, cz);
 
     let ceilH = def.baseCeil + (range(rng, 0, 1) - 0.5) * 2 * def.ceilJitter;
     let tint = 0.78 + rng() * 0.26;
     let pillar = chance(rng, def.pillarProb);
     let light = chance(rng, def.lightChance);
-    let water = !!def.water;
+    let water = !!def.water && chance(rng, 0.85);
     let weird = 0; // visual distortion amount for impossible rooms
     let propBoost = 1;
+    // per-cell architectural variation
+    let narrow = 0;          // 0..1 corridor squeeze (walls pushed inward)
+    let ceilDrop = 0;        // lowered soffit height below ceilH (0 = none)
+    let damage = 0;          // 0..1 — stains, rubble, broken panels
+    let pillarShape = 0;     // 0 square, 1 round, 2 cross
+    let lightStyle = 'panel';// panel | tube | bulb | none
+
+    // ---- district modulation: whole regions drift in character ----
+    if (district) {
+      const d = district;
+      tint *= d.tint !== undefined ? d.tint : 1;
+      ceilH += d.ceilAdd || 0;
+      if (d.pillarProb !== undefined) pillar = chance(rng, d.pillarProb);
+      light = light && chance(rng, d.lightKeep !== undefined ? d.lightKeep : 1);
+      if (d.lightBonus && chance(rng, d.lightBonus)) light = true;
+      propBoost *= d.propBoost !== undefined ? d.propBoost : 1;
+      if (d.narrow && chance(rng, d.narrow)) narrow = 0.3 + rng() * 0.55;
+      if (d.damage && chance(rng, d.damage)) damage = 0.4 + rng() * 0.6;
+      if (d.ceilDrop && chance(rng, d.ceilDrop)) ceilDrop = 0.5 + rng() * 0.8;
+      if (d.pillarShape !== undefined) pillarShape = d.pillarShape;
+      if (d.lightStyle && chance(rng, 0.8)) lightStyle = d.lightStyle;
+      if (d.water && chance(rng, d.water)) water = true;
+    }
+    // cell-level organic damage/variation everywhere (not just districts)
+    if (chance(rng, 0.06)) damage = Math.max(damage, 0.3 + rng() * 0.5);
+    if (!narrow && chance(rng, 0.05)) narrow = 0.25 + rng() * 0.4;
+    if (!pillarShape && chance(rng, 0.35)) pillarShape = (rng() * 3) | 0;
+    if (lightStyle === 'panel' && chance(rng, 0.3)) lightStyle = rng() < 0.5 ? 'tube' : 'bulb';
 
     if (special) {
       const sr = special.seed;
@@ -129,7 +192,7 @@ export class WorldModel {
         case 'highceiling':
           ceilH = 7 + sr() * 5; light = chance(sr, 0.5); break;
         case 'pillarmaze':
-          pillar = chance(sr, 0.55); break;
+          pillar = chance(sr, 0.55); pillarShape = (sr() * 3) | 0; break;
         case 'flooded':
           water = true; break;
         case 'massivehall':
@@ -146,17 +209,46 @@ export class WorldModel {
           tint *= 0.8; light = chance(sr, 0.35); break;
         case 'noclipdoor':
           pillar = false; light = true; break;
+        case 'circularroom':
+          ceilH = 5.5 + sr() * 3; light = chance(sr, 0.75); pillar = false; propBoost = 0.4; break;
+        case 'longcorridor':
+          narrow = 0.35 + sr() * 0.3; light = chance(sr, 0.4); lightStyle = 'tube'; pillar = false; propBoost = 0.2; break;
+        case 'furniturepile':
+          propBoost = 6; light = chance(sr, 0.4); tint *= 0.85; break;
+        case 'monolith':
+          ceilH = 8 + sr() * 5; light = chance(sr, 0.5); pillar = false; propBoost = 0.1; break;
+        case 'monitorroom':
+          propBoost = 4; light = chance(sr, 0.15); tint *= 0.8; break;
+        case 'ventroom':
+          ceilH = 4.5 + sr() * 2; light = chance(sr, 0.3); tint *= 0.75; propBoost = 0.3; break;
+        case 'doormaze':
+          light = chance(sr, 0.55); propBoost = 0.1; break;
+        case 'whiteroom':
+          tint = 1.35; light = true; propBoost = 0; pillar = false; water = false;
+          ceilH = 3.4 + sr(); damage = 0; break;
+        case 'elevator':
+          pillar = false; light = chance(sr, 0.5); propBoost = 0.2; break;
+        case 'clockroom':
+          light = true; propBoost = 0.15; pillar = false; break;
+        case 'statue':
+          light = chance(sr, 0.4); propBoost = 0.1; tint *= 0.7; pillar = false; break;
+        case 'reddoor':
+          light = chance(sr, 0.5); propBoost = 0.3; break;
+        case 'officefloor':
+          propBoost = 2.4; light = chance(sr, 0.7); pillar = false; break;
       }
     }
     // highway corridors stay lit a bit more often for orientation
     if (cx % 4 === 0 || cz % 4 === 0) light = light || chance(rng, 0.35);
 
     const cell = {
-      cx, cz, special, openHall,
+      cx, cz, special, openHall, district,
       ceilH: Math.max(2.15, ceilH),
       tint, pillar, light, water, weird, propBoost,
+      narrow, ceilDrop, damage, pillarShape, lightStyle,
       propRng: rngFrom(hashStr(this.seed, `l${this.level}:prop:${cx},${cz}`)),
       noteSpawn: chance(rng, 0.006),       // rare readable notes
+      batterySpawn: chance(rng, 0.011),    // flashlight batteries lying around
       surfaceVariant: rng(),
     };
     this.cellCache.set(key, cell);
@@ -198,16 +290,33 @@ export class WorldModel {
         if (aIn || bIn) return { wall: true, door: false }; // block surfaces
         return { wall: false, door: false };
       }
+      if (sa.type === 'circularroom') {
+        // solid corner filler + curved boundary: membership by distance to center
+        const inA = circleHas(sa, cx, cz), inB = circleHas(sa, nx, nz);
+        if (!inA && !inB) return { wall: true, door: false };
+        if (inA !== inB) return { wall: true, door: false };
+        return { wall: false, door: false };
+      }
+      if (sa.type === 'monolith') {
+        // huge central structure occupying the middle cells
+        const mx = sa.x + (sa.w >> 1), mz = sa.z + (sa.h >> 1);
+        const inner = { x: mx - 1, z: mz - 1, w: 3, h: 3 };
+        const aIn = inRect2(cx, cz, inner), bIn = inRect2(nx, nz, inner);
+        if (aIn || bIn) return { wall: true, door: false };
+        return { wall: false, door: false };
+      }
       return { wall: false, door: false };
     }
 
-    // special <-> outside boundary: solid wall except the door side
+    // special <-> outside boundary: solid wall except door edges
     if (sa && !sb) {
+      if (sa.type === 'circularroom' && !circleHas(sa, cx, cz)) return { wall: true, door: false };
       const isDoor = this.isSpecialDoorEdge(sa, cx, cz, dir);
       if (isDoor) return { wall: true, door: true, specialDoor: true };
       return { wall: true, door: false };
     }
     if (!sa && sb) {
+      if (sb.type === 'circularroom' && !circleHas(sb, nx, nz)) return { wall: true, door: false };
       const isDoor = this.isSpecialDoorEdge(sb, nx, nz, reverse(dir));
       if (isDoor) return { wall: true, door: true, specialDoor: true };
       return { wall: true, door: false };
@@ -233,6 +342,22 @@ export class WorldModel {
     // one doorway, on the side chosen deterministically, middle of that side
     if (s.type === 'noclipdoor') return false;
     const mx = s.x + (s.w >> 1), mz = s.z + (s.h >> 1);
+    if (s.type === 'doormaze') {
+      // many doors: every other cell on every boundary side
+      const onN = dir === 3 && cz === s.z && cx >= s.x && cx < s.x + s.w;
+      const onS = dir === 1 && cz === s.z + s.h - 1 && cx >= s.x && cx < s.x + s.w;
+      const onW = dir === 2 && cx === s.x && cz >= s.z && cz < s.z + s.h;
+      const onE = dir === 0 && cx === s.x + s.w - 1 && cz >= s.z && cz < s.z + s.h;
+      return (onN || onS) && cx % 2 === 0 || (onW || onE) && cz % 2 === 0;
+    }
+    if (s.type === 'longcorridor') {
+      // entrances at both short ends of the strip
+      const along = s.w >= s.h ? 'x' : 'z';
+      if (along === 'x') {
+        return (dir === 2 && cx === s.x && cz === mz) || (dir === 0 && cx === s.x + s.w - 1 && cz === mz);
+      }
+      return (dir === 3 && cz === s.z && cx === mx) || (dir === 1 && cz === s.z + s.h - 1 && cx === mx);
+    }
     switch (s.doorSide) {
       case 0: return dir === 3 && cx === mx && cz === s.z;      // north edge
       case 1: return dir === 0 && cx === s.x + s.w - 1 && cz === mz; // east edge
@@ -283,6 +408,13 @@ export class WorldModel {
 
 function reverse(dir) { return (dir + 2) % 4; }
 function inRect2(cx, cz, r) { return cx >= r.x && cx < r.x + r.w && cz >= r.z && cz < r.z + r.h; }
+function circleHas(s, cx, cz) {
+  // cell membership in the circle inscribed in the special's rect
+  const cxm = s.x + s.w / 2, czm = s.z + s.h / 2;
+  const r = Math.min(s.w, s.h) / 2 - 0.05;
+  const dx = cx + 0.5 - cxm, dz = cz + 0.5 - czm;
+  return dx * dx + dz * dz <= r * r;
+}
 
 // ---------------------------------------------------------------------------
 // BFS pathfinding on the cell grid (monsters treat doors as passable)

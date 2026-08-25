@@ -37,6 +37,8 @@ class Room {
       rot: [0, 0],
       anim: 'idle',
       emote: '',
+      fl: 0,
+      dead: false,
       joined: Date.now(),
       color: pickColor(this.players.size),
     };
@@ -69,7 +71,7 @@ class Room {
   statePacket() {
     const list = [];
     for (const p of this.players.values()) {
-      list.push([p.id, p.pos[0], p.pos[1], p.pos[2], p.rot[0], p.rot[1], p.anim, p.emote]);
+      list.push([p.id, p.pos[0], p.pos[1], p.pos[2], p.rot[0], p.rot[1], p.anim, p.emote, p.fl, p.dead ? 1 : 0]);
     }
     return { t: 'st', list };
   }
@@ -107,7 +109,7 @@ class Room {
   isEmpty() { return this.players.size === 0; }
 }
 
-const WORLD_EVENTS = new Set(['reldoor', 'chunkmorph', 'lightdie', 'spawnmonster', 'caught']);
+const WORLD_EVENTS = new Set(['reldoor', 'chunkmorph', 'lightdie', 'spawnmonster', 'caught', 'died', 'respawn']);
 
 function pickColor(i) {
   const colors = ['#d9b46c', '#8fa3c7', '#a3c78f', '#c78f8f', '#b48fd9', '#7ec8c8', '#c7b1a0', '#9ec78f'];

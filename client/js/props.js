@@ -125,6 +125,118 @@ export const PROP_BUILDERS = {
     g.box(0.08, 0.55, 0.1, 0.28, 1.05, 0, c);
     g.col(0.32);
   },
+  // ---- new props for variety + landmarks ----
+  monitorstack(g, rng) {
+    const c = [48, 50, 54];
+    g.box(0.55, 0.45, 0.5, 0, 0.23, 0, c, rng() * 0.5);
+    g.box(0.42, 0.34, 0.06, 0, 0.25, 0.26, [30, 34, 30]); // dark screen
+    if (chance(rng, 0.7)) g.box(0.5, 0.42, 0.45, 0.08, 0.66, -0.04, shade(c, rng() * 16 - 8), rng() * 0.6);
+    if (chance(rng, 0.4)) g.box(0.45, 0.4, 0.42, -0.05, 1.06, 0.03, shade(c, -14), rng() * 0.4);
+    g.col(0.4);
+  },
+  shelf(g, rng) {
+    const c = pickColor(rng, [[86, 72, 54], [70, 74, 80], [96, 88, 74]]);
+    g.box(1.6, 2.0, 0.35, 0, 1.0, 0, c);
+    for (let i = 0; i < 4; i++) {
+      g.box(1.5, 0.04, 0.3, 0, 0.35 + i * 0.45, 0.02, shade(c, -18));
+      const n = intRange(rng, 1, 4);
+      for (let b = 0; b < n; b++) {
+        g.box(0.09, 0.28 + rng() * 0.1, 0.2, -0.65 + rng() * 1.3, 0.38 + i * 0.45, 0.02,
+          pickColor(rng, [[120, 60, 50], [60, 80, 100], [110, 100, 70], [70, 90, 70]]));
+      }
+    }
+    g.col(0.85);
+  },
+  sofa(g, rng) {
+    const c = pickColor(rng, [[92, 60, 48], [60, 74, 66], [86, 72, 58]]);
+    g.box(1.7, 0.4, 0.7, 0, 0.2, 0, c);
+    g.box(1.7, 0.55, 0.2, 0, 0.4, -0.28, shade(c, -12));
+    g.box(0.2, 0.3, 0.7, -0.78, 0.5, 0, shade(c, -8));
+    g.box(0.2, 0.3, 0.7, 0.78, 0.5, 0, shade(c, -8));
+    g.col(0.95);
+  },
+  wallclock(g, rng) {
+    g.box(0.5, 0.5, 0.08, 0, 2.0, 0, [60, 52, 44]);
+    g.box(0.4, 0.4, 0.02, 0, 2.0, 0.05, [212, 208, 196]);
+  },
+  cabletray(g, rng) {
+    const c = [66, 68, 72];
+    g.box(0.4, 0.08, 3.6, 0, 2.1, 0, c);
+    for (let i = 0; i < 4; i++) {
+      g.box(0.05, 0.05, 3.6, -0.14 + i * 0.09, 2.16, 0, shade(c, 14 + rng() * 20));
+    }
+  },
+  wires(g, rng) {
+    for (let i = 0; i < 3; i++) {
+      const x = (rng() - 0.5) * 1.5, z = (rng() - 0.5) * 1.5;
+      g.box(0.04, 0.5 + rng() * 0.9, 0.04, x, 2.2 - (0.5 + rng() * 0.9), z,
+        pickColor(rng, [[30, 30, 34], [60, 30, 28], [40, 44, 50]]));
+    }
+  },
+  vending(g, rng) {
+    const c = pickColor(rng, [[120, 40, 36], [40, 70, 90], [150, 148, 140]]);
+    g.box(0.9, 1.9, 0.7, 0, 0.95, 0, c);
+    g.box(0.6, 1.1, 0.04, -0.08, 1.15, 0.36, [20, 24, 26]);
+    g.box(0.16, 0.5, 0.04, 0.3, 1.2, 0.36, shade(c, -30));
+    g.col(0.55);
+  },
+  ventduct(g, rng) {
+    const c = [88, 92, 96];
+    const w = 0.9 + rng() * 0.7;
+    g.box(w, w * 0.7, 3.8, 0, 2.0, 0, c, rng() * 3.14);
+    g.box(w + 0.06, w * 0.7 + 0.06, 0.1, 0, 2.0, -1.6, shade(c, -16), rng() * 3.14);
+  },
+  tippedchair(g, rng) {
+    const c = pickColor(rng, [[60, 62, 66], [88, 70, 52]]);
+    g.box(0.5, 0.06, 0.5, 0, 0.25, 0, c, 0.3);
+    g.box(0.5, 0.5, 0.06, 0.3, 0.3, -0.1, c, 0.3);
+    for (const [dx, dz] of [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2]]) {
+      g.box(0.05, 0.4, 0.05, dx * 0.4, 0.12, dz * 1.6, c, 0.3);
+    }
+    g.col(0.4);
+  },
+  rubble(g, rng) {
+    const c = [96, 92, 86];
+    const n = 2 + intRange(rng, 1, 4);
+    for (let i = 0; i < n; i++) {
+      const s = 0.15 + rng() * 0.4;
+      g.box(s, s * 0.5, s, (rng() - 0.5) * 1.8, s * 0.25, (rng() - 0.5) * 1.8, shade(c, -rng() * 40), rng() * 3);
+    }
+    g.col(0.5);
+  },
+  bigclock(g, rng) {
+    // huge wall clock landmark
+    g.box(2.2, 2.2, 0.15, 0, 2.2, 0, [50, 44, 38]);
+    g.box(1.9, 1.9, 0.04, 0, 2.2, 0.08, [210, 204, 190]);
+    g.box(0.06, 0.7, 0.03, 0, 2.45, 0.11, [30, 28, 26]);  // minute hand
+    g.box(0.05, 0.45, 0.03, 0.12, 2.25, 0.11, [30, 28, 26], 0.6); // hour hand
+    g.col(1.2);
+  },
+  statue(g, rng) {
+    const c = [128, 126, 120];
+    g.box(0.9, 0.25, 0.9, 0, 0.13, 0, shade(c, -30));   // plinth
+    g.box(0.34, 0.5, 0.3, 0, 0.5, 0, c);                // legs merged
+    g.box(0.46, 0.75, 0.3, 0, 1.12, 0, c);              // torso
+    g.box(0.24, 0.3, 0.24, 0, 1.75, 0, shade(c, 8));    // head (slightly too small — wrong)
+    g.box(0.1, 0.8, 0.12, -0.3, 1.05, 0, c);            // arms
+    g.box(0.1, 0.8, 0.12, 0.3, 1.05, 0, c);
+    g.col(0.6);
+  },
+  elevatorframe(g, rng) {
+    const c = [96, 100, 106];
+    // broken elevator: frame + half-open doors + dark shaft
+    g.box(0.15, 2.5, 0.2, -0.75, 1.25, 0, c);
+    g.box(0.15, 2.5, 0.2, 0.75, 1.25, 0, c);
+    g.box(1.65, 0.3, 0.2, 0, 2.65, 0, shade(c, -10));
+    g.box(0.55, 2.3, 0.08, -0.62, 1.15, 0.02, shade(c, -24)); // door leaf half open
+    g.box(0.5, 2.3, 0.06, 0.62, 1.15, -0.3, [16, 16, 20]);    // dark shaft interior
+    g.box(1.2, 2.3, 0.9, 0.1, 1.15, -0.75, [10, 10, 14]);     // shaft void
+    g.col(0.9);
+  },
+  battery(g, rng) {
+    g.box(0.09, 0.16, 0.09, 0, 0.08, 0, [60, 90, 60]);
+    g.box(0.03, 0.03, 0.03, 0, 0.175, 0, [180, 180, 180]);
+  },
 };
 
 function pickColor(rng, arr) { return arr[(rng() * arr.length) | 0]; }

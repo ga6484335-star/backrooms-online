@@ -41,6 +41,18 @@ export class LightManager {
   killFixture(key) { this.dead.add(key); }
   reviveFixture(key) { this.dead.delete(key); }
 
+  // permanently kill the nearest live fixture within maxD; returns its key
+  killNearest(px, pz, maxD = 12) {
+    let best = null, bestD = maxD;
+    for (const [key, f] of this.fixtures) {
+      if (this.dead.has(key)) continue;
+      const d = Math.hypot(f.x - px, f.z - pz);
+      if (d < bestD) { best = key; bestD = d; }
+    }
+    if (best) this.dead.add(best);
+    return best;
+  }
+
   update(dt, px, pz, camera) {
     this.time += dt;
     // rank fixtures by distance to player

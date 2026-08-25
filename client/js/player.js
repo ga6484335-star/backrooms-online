@@ -40,6 +40,8 @@ export class PlayerController {
     this.emoteT = 0;
     this.sitting = false;
     this.colliderBuf = [];
+    this.dead = false;
+    this.flashOn = 0;
 
     if (!this.mobile) this._bindDesktop();
   }
@@ -71,6 +73,14 @@ export class PlayerController {
   teleport(x, z) {
     this.pos.set(x, EYE, z);
     this.vel.set(0, 0, 0);
+  }
+
+  // current noise signature in meters (how far footsteps carry)
+  noiseLevel() {
+    if (this.dead || this.sitting) return 0;
+    if (this.anim === 'run') return 24;
+    if (this.anim === 'walk') return 8;
+    return 0;
   }
 
   eyeHeight() { return this.sitting ? 1.0 : EYE; }

@@ -14,9 +14,11 @@ export class HorrorEvents {
     this.time = 0;
     this.isHostFn = () => false;
     this.onMessage = null;
+    this.lightMgr = null;
   }
 
   setHostFn(fn) { this.isHostFn = fn; }
+  setLightMgr(lm) { this.lightMgr = lm; }
 
   update(dt, player) {
     this.time += dt;
@@ -26,7 +28,8 @@ export class HorrorEvents {
     if (this.timer <= 0) {
       this.timer = 40 + Math.random() * 60;
       if (this.isHostFn()) {
-        const kind = ['distantmetal', 'lightflicker', 'creak', 'breath'][ (Math.random() * 4) | 0 ];
+        const kinds = ['distantmetal', 'lightflicker', 'creak', 'breath', 'scream', 'footsteps', 'lightdie'];
+        const kind = kinds[(Math.random() * kinds.length) | 0];
         this.network.sendEvent(kind, { x: player.pos.x, z: player.pos.z });
         this.fire(kind, player);
       }
@@ -37,6 +40,7 @@ export class HorrorEvents {
       if (roll < 0.35) this.fire('behindyou', player);
       else if (roll < 0.55) this.fire('glitch', player);
       else if (roll < 0.75) this.fire('whisper', player);
+      else if (roll < 0.85) this.fire('footsteps', player);
       // else: nothing. silence is part of the horror.
     }
   }
@@ -46,14 +50,33 @@ export class HorrorEvents {
     switch (kind) {
       case 'distantmetal': a.distantMetal(0.8 + Math.random() * 0.6); break;
       case 'creak': a.creak(); break;
+      case 'scream': {
+        a.distantScream(0.7 + Math.random() * 0.5);
+        if (this.onMessage && Math.random() < 0.5) this.onMessage('A DISTANT SCREAM.');
+        break;
+      }
+      case 'footsteps': {
+        a.distantFootsteps(3 + (Math.random() * 4 | 0));
+        break;
+      }
+      case 'lightdie': {
+        // nearest fixture goes out for good + the hum drops
+        if (this.lightMgr && player) {
+          const key = this.lightMgr.killNearest(player.pos.x, player.pos.z, 12);
+          if (key) {
+            a.buzz(player.pos.x, player.pos.z, 0.6);
+            this.renderer.bumpGlitch(0.8);
+            if (this.onMessage && Math.random() < 0.4) this.onMessage('A LIGHT DIED NEARBY.');
+          }
+        }
+        break;
+      }
       case 'lightflicker': {
-        // glitch + buzz from nearest light-ish position
         this.renderer.bumpGlitch(0.5);
         a.buzz(player.pos.x + 2, player.pos.z, 1.2);
         break;
       }
       case 'breath': {
-        // very quiet breath-like filtered noise
         a.behindYou();
         if (this.onMessage) this.onMessage('YOU HEAR BREATHING.');
         break;

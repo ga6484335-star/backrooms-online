@@ -38,8 +38,13 @@ export class Network {
   startGame(level) { this.send({ t: 'start', level }); }
   leave() { this.send({ t: 'leave' }); }
 
-  sendState(px, py, pz, yaw, pitch, anim, emote) {
-    this.send({ t: 'u', p: [+px.toFixed(2), +py.toFixed(2), +pz.toFixed(2)], r: [+yaw.toFixed(3), +pitch.toFixed(3)], a: anim, e: emote });
+  sendState(px, py, pz, yaw, pitch, anim, emote, fl, dead) {
+    this.send({
+      t: 'u',
+      p: [+px.toFixed(2), +py.toFixed(2), +pz.toFixed(2)],
+      r: [+yaw.toFixed(3), +pitch.toFixed(3)],
+      a: anim, e: emote, fl: fl ? 1 : 0, d: dead ? 1 : 0,
+    });
   }
 
   sendEmote(e) { this.send({ t: 'emote', e }); }

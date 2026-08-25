@@ -16,6 +16,13 @@ export const LEVELS = [
     props: ['papers', 'chair', 'desk', 'cabinet', 'plantpot'],
     hum: 120, ambience: 'office',
     specialBias: 1.0,
+    districts: [
+      { name: 'core',      w: 0.34 }, // plain yellow maze
+      { name: 'open',      w: 0.16, pillarProb: 0.3, lightBonus: 0.1, propBoost: 0.4, pillarShape: 1 },
+      { name: 'decayed',   w: 0.18, tint: 0.72, damage: 0.55, lightKeep: 0.45, propBoost: 0.6, lightStyle: 'bulb' },
+      { name: 'cramped',   w: 0.14, narrow: 0.5, ceilAdd: -0.35, lightKeep: 0.7, propBoost: 1.6 },
+      { name: 'furnished', w: 0.18, propBoost: 2.6, pillarProb: 0.02 },
+    ],
   },
   {
     id: 1, name: 'LEVEL 1 — MAINTENANCE',
@@ -31,6 +38,13 @@ export const LEVELS = [
     props: ['pipe', 'barrel', 'crate', 'locker', 'valve'],
     hum: 100, ambience: 'industrial',
     specialBias: 1.15,
+    districts: [
+      { name: 'core',       w: 0.3 },
+      { name: 'pipes',      w: 0.22, propBoost: 2.0, pillarShape: 1, lightKeep: 0.7 },
+      { name: 'tunnels',    w: 0.2,  narrow: 0.62, ceilAdd: -0.9, ceilDrop: 0.35, lightStyle: 'bulb', tint: 0.8 },
+      { name: 'halls',      w: 0.14, ceilAdd: 1.6, pillarProb: 0.34, propBoost: 0.7 },
+      { name: 'rustzone',   w: 0.14, tint: 0.7, damage: 0.6, lightKeep: 0.4 },
+    ],
   },
   {
     id: 2, name: 'LEVEL 2 — PIPEWORKS',
@@ -43,9 +57,16 @@ export const LEVELS = [
       lightColor: 0xffd9a0, lightI: 8, lightDist: 7,
     },
     lightSpacing: 4, lightChance: 0.38,
-    props: ['pipe', 'pipeV', 'valve', 'crate', 'cabletray'],
+    props: ['pipe', 'valve', 'crate', 'cabletray', 'wires'],
     hum: 90, ambience: 'mechanical',
     specialBias: 1.2,
+    districts: [
+      { name: 'core',     w: 0.3, narrow: 0.3 },
+      { name: 'crawl',    w: 0.22, narrow: 0.75, ceilAdd: -0.35, lightKeep: 0.35, lightStyle: 'bulb' },
+      { name: 'boiler',   w: 0.2,  propBoost: 2.4, ceilAdd: 1.2, lightStyle: 'bulb', tint: 0.85 },
+      { name: 'blackout', w: 0.16, lightKeep: 0.12, damage: 0.5, tint: 0.6 },
+      { name: 'vents',    w: 0.12, ceilDrop: 0.5, narrow: 0.4, propBoost: 1.6 },
+    ],
   },
   {
     id: 3, name: 'LEVEL 3 — THE FLOOD',
@@ -62,6 +83,13 @@ export const LEVELS = [
     hum: 110, ambience: 'flooded',
     water: true,
     specialBias: 1.1,
+    districts: [
+      { name: 'core',      w: 0.3 },
+      { name: 'deepwater', w: 0.2,  tint: 0.6, lightKeep: 0.35, propBoost: 0.5 },
+      { name: 'dryhalls',  w: 0.18, propBoost: 1.8, lightBonus: 0.2 },
+      { name: 'ruined',    w: 0.18, damage: 0.65, tint: 0.75, ceilDrop: 0.3 },
+      { name: 'drainage',  w: 0.14, narrow: 0.5, ceilAdd: -0.7, lightStyle: 'bulb' },
+    ],
   },
   {
     id: 4, name: 'LEVEL 4 — OFFICE',
@@ -74,9 +102,16 @@ export const LEVELS = [
       lightColor: 0xf2f4ff, lightI: 11, lightDist: 10,
     },
     lightSpacing: 2, lightChance: 0.6,
-    props: ['cubicle', 'chair', 'desk', 'cabinet', 'papers', 'watercooler'],
+    props: ['cubicle', 'chair', 'desk', 'cabinet', 'papers', 'watercooler', 'monitorstack', 'shelf'],
     hum: 120, ambience: 'office',
     specialBias: 1.0,
+    districts: [
+      { name: 'core',       w: 0.28 },
+      { name: 'bullpen',    w: 0.22, propBoost: 2.6, pillarProb: 0.0 },
+      { name: 'archives',   w: 0.18, propBoost: 1.9, tint: 0.85, lightKeep: 0.55, lightStyle: 'bulb' },
+      { name: 'executive',  w: 0.14, ceilAdd: 0.5, propBoost: 1.3, lightBonus: 0.15 },
+      { name: 'abandoned',  w: 0.18, damage: 0.6, lightKeep: 0.3, tint: 0.7, propBoost: 0.7 },
+    ],
   },
   {
     id: 5, name: 'LEVEL 5 — HOTEL',
@@ -89,9 +124,16 @@ export const LEVELS = [
       lightColor: 0xffd9a8, lightI: 10, lightDist: 9,
     },
     lightSpacing: 3, lightChance: 0.6,
-    props: ['dresser', 'cart', 'plantpot', 'cabinet', 'lamp'],
+    props: ['dresser', 'cart', 'plantpot', 'cabinet', 'lamp', 'sofa', 'wallclock'],
     hum: 115, ambience: 'hotel',
     specialBias: 1.25,
+    districts: [
+      { name: 'core',      w: 0.3 },
+      { name: 'corridors', w: 0.24, narrow: 0.45, lightStyle: 'bulb', propBoost: 1.4 },
+      { name: 'ballroom',  w: 0.14, ceilAdd: 1.8, pillarProb: 0.3, propBoost: 0.5, lightBonus: 0.2 },
+      { name: 'decayed',   w: 0.18, tint: 0.7, damage: 0.6, lightKeep: 0.35 },
+      { name: 'service',   w: 0.14, ceilAdd: -0.6, narrow: 0.3, propBoost: 1.8, tint: 0.85, lightStyle: 'tube' },
+    ],
   },
 ];
 
