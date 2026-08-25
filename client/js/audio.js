@@ -328,7 +328,123 @@ export class AudioEngine {
         o.connect(f).connect(g); o.start(t); o.stop(t + 1.0);
         break;
       }
+      case 'tallone': {
+        // a sub-bass presence you feel in your teeth, with a slow wavering
+        // overtone like air moving through a very long throat
+        const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = 31;
+        const o2 = ctx.createOscillator(); o2.type = 'sine';
+        o2.frequency.setValueAtTime(124, t);
+        o2.frequency.linearRampToValueAtTime(117, t + 3.5);
+        const g2 = ctx.createGain(); g2.gain.value = 0.25;
+        this._env(g, t, 2.0, 3.0, 0.34 * intensity);
+        o.connect(g); o2.connect(g2).connect(g);
+        o.start(t); o.stop(t + 5.2); o2.start(t); o2.stop(t + 5.2);
+        break;
+      }
+      case 'hollow': {
+        // many breaths at once, slightly out of phase — a congregation exhaling
+        for (let i = 0; i < 3; i++) {
+          const src = ctx.createBufferSource(); src.buffer = this._noiseBuf;
+          src.playbackRate.value = 0.32 + i * 0.05;
+          const f = ctx.createBiquadFilter(); f.type = 'bandpass';
+          f.frequency.value = 300 + i * 90; f.Q.value = 2.5;
+          const gg = ctx.createGain(); gg.connect(f);
+          this._env(gg, t + i * 0.3, 0.5, 1.1, 0.12 * intensity);
+          src.connect(f).connect(g);
+          src.start(t + i * 0.3, Math.random(), 1.8);
+        }
+        break;
+      }
+      case 'bonefiend': {
+        // dry knocking: bone on tile, irregular rhythm, too many joints
+        const n = 4 + ((Math.random() * 4) | 0);
+        for (let i = 0; i < n; i++) {
+          const dt = i * (0.09 + Math.random() * 0.14);
+          const src = ctx.createBufferSource(); src.buffer = this._noiseBuf;
+          src.playbackRate.value = 1.8 + Math.random();
+          const f = ctx.createBiquadFilter(); f.type = 'bandpass';
+          f.frequency.value = 800 + Math.random() * 900; f.Q.value = 9;
+          const gg = ctx.createGain(); gg.connect(f);
+          this._env(gg, t + dt, 0.002, 0.07, 0.22 * intensity);
+          src.connect(f).connect(g);
+          src.start(t + dt, Math.random(), 0.1);
+        }
+        break;
+      }
+      case 'walldweller': {
+        // slow drag of something flat against plaster
+        const src = ctx.createBufferSource(); src.buffer = this._noiseBuf;
+        src.playbackRate.value = 0.22;
+        const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 420; f.Q.value = 1.4;
+        const lfo = ctx.createOscillator(); lfo.frequency.value = 2.2;
+        const lg = ctx.createGain(); lg.gain.value = 0.1 * intensity;
+        lfo.connect(lg).connect(g.gain);
+        this._env(g, t, 0.4, 1.6, 0.2 * intensity);
+        src.connect(f).connect(g); src.start(t, Math.random(), 2.2);
+        lfo.start(t); lfo.stop(t + 2.2);
+        break;
+      }
+      case 'deepone': {
+        // wet gurgle rising out of water, then a heavy swallow
+        const o = ctx.createOscillator(); o.type = 'sawtooth';
+        o.frequency.setValueAtTime(55, t);
+        o.frequency.linearRampToValueAtTime(95, t + 0.7);
+        o.frequency.exponentialRampToValueAtTime(40, t + 1.3);
+        const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 240; f.Q.value = 6;
+        const lfo = ctx.createOscillator(); lfo.frequency.value = 9;
+        const lg = ctx.createGain(); lg.gain.value = 0.14 * intensity;
+        lfo.connect(lg).connect(g.gain);
+        this._env(g, t, 0.25, 1.4, 0.32 * intensity);
+        o.connect(f).connect(g); o.start(t); o.stop(t + 1.8);
+        lfo.start(t); lfo.stop(t + 1.8);
+        break;
+      }
+      case 'ceiling': {
+        // dry ticking from directly above — nails tapping the ceiling tiles
+        const n = 3 + ((Math.random() * 4) | 0);
+        for (let i = 0; i < n; i++) {
+          const dt = i * (0.16 + Math.random() * 0.2);
+          const o = ctx.createOscillator(); o.type = 'square';
+          o.frequency.value = 2400 + Math.random() * 1200;
+          const gg = ctx.createGain(); gg.connect(g);
+          this._env(gg, t + dt, 0.001, 0.04, 0.12 * intensity);
+          o.connect(gg);
+          o.start(t + dt); o.stop(t + dt + 0.06);
+        }
+        break;
+      }
+      case 'falseplayer': {
+        // a voice almost forming words — chopped, pitched wrong, backwards-feeling
+        const o = ctx.createOscillator(); o.type = 'sawtooth';
+        o.frequency.setValueAtTime(180, t);
+        o.frequency.linearRampToValueAtTime(140, t + 0.3);
+        o.frequency.linearRampToValueAtTime(210, t + 0.6);
+        o.frequency.linearRampToValueAtTime(120, t + 0.9);
+        const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 500; f.Q.value = 3;
+        const lfo = ctx.createOscillator(); lfo.frequency.value = 6;
+        const lg = ctx.createGain(); lg.gain.value = 0.16 * intensity;
+        lfo.connect(lg).connect(g.gain);
+        this._env(g, t, 0.1, 1.1, 0.24 * intensity);
+        o.connect(f).connect(g); o.start(t); o.stop(t + 1.3);
+        lfo.start(t); lfo.stop(t + 1.3);
+        break;
+      }
     }
+  }
+
+  // heavy splash — something big moving through standing water
+  splash(x, z, intensity = 1) {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const p = this.panner(x, 0.3, z);
+    const src = ctx.createBufferSource(); src.buffer = this._noiseBuf;
+    src.playbackRate.setValueAtTime(1.4, t);
+    src.playbackRate.exponentialRampToValueAtTime(0.35, t + 0.5);
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 900; f.Q.value = 0.8;
+    const g = ctx.createGain();
+    this._env(g, t, 0.01, 0.7, 0.4 * intensity);
+    src.connect(f).connect(g).connect(p).connect(this.master);
+    src.start(t, Math.random(), 1.0);
   }
 
   heartbeat(intensity = 1) {

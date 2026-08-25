@@ -140,6 +140,22 @@ async function main() {
     console.log('  [info] remote y offsets seen by client 2:', JSON.stringify(jumpSeen));
     check(Array.isArray(jumpSeen) && jumpSeen.some((y) => y > 1.7 && y < 2.2), 'jump height synced to peer');
 
+    // --- host spawns one of each new species; client 2 must receive them
+    // through the monster snapshot stream (buildMonster + network wire)
+    await p1.eval(`
+      ['tallone','hollow','bonefiend','walldweller','deepone','ceiling','falseplayer']
+        .forEach((t, i) => window.__dbg.spawnMonster(t, 4 + i * 3, 12));
+      true
+    `);
+    await sleep(2500);
+    const hostTypes = await p1.eval(`window.__dbg.monsterTypes()`);
+    const cliTypes = await p2.eval(`window.__dbg.monsterTypes()`);
+    console.log('  [info] host monsters:', JSON.stringify(hostTypes));
+    console.log('  [info] client monsters:', JSON.stringify(cliTypes));
+    for (const t of ['tallone', 'hollow', 'bonefiend', 'walldweller', 'deepone', 'ceiling', 'falseplayer']) {
+      check(cliTypes.some((s) => s.startsWith(t + ':')), `client 2 sees ${t}`);
+    }
+
     // --- disconnect client 2, verify client 1 updates
     c2.kill('SIGKILL');
     await sleep(1500);

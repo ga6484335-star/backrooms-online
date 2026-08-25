@@ -12,6 +12,7 @@ import { AudioEngine } from './audio.js';
 import { PlayerController, isMobile } from './player.js';
 import { RemotePlayers } from './avatar.js';
 import { MonsterSystem } from './monsters/ai.js';
+import { MONSTER_TYPES } from './monsters/defs.js';
 import { HorrorEvents } from './monsters/index.js';
 import { Network } from './network.js';
 import { MobileControls } from './mobile.js';
@@ -229,6 +230,14 @@ function startGame(seed, level) {
     net.sendEvent('caught', { pid: p.id });
     if (p.id === -1) localDeath();
   };
+  monsters.lightMgr = lightMgr; // monsters can kill lights (walldweller reveal)
+  monsters.onScare = () => {
+    // non-lethal contact: pure dread, no death
+    player.trauma(1);
+    audio.heartbeat(1);
+    engine.bumpGlitch(1.6);
+    flashText('IT WAS NEVER THERE.');
+  };
 
   // remote player avatars
   for (const [id, p] of net.players) {
@@ -241,6 +250,17 @@ function startGame(seed, level) {
   player.teleport(sx, sz);
   player.yaw = player.yawTarget = Math.PI * 0.25;
   player.enabled = true;
+
+  // dev/QA showcase: ?showcase=<type> spawns the species right in front of
+  // the player with the flashlight on, for visual verification
+  const showType = new URLSearchParams(location.search).get('showcase');
+  if (showType && MONSTER_TYPES[showType]) {
+    const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw);
+    const id = monsters.spawnMonster(showType, player.pos.x + fx * 6, player.pos.z + fz * 6);
+    const mm = monsters.monsters.get(id);
+    if (mm) mm.yaw = player.yaw + Math.PI; // face the camera
+    if (flash && !flash.on) flash.toggle();
+  }
 
   // ambience + fog
   const levelDef = getLevel(level);
@@ -697,6 +717,8 @@ window.__dbg = {
   state: () => ({ gameState, dead, paused, sitting: player.sitting, grounded: player.grounded, yOff: player.yOff }),
   flash: () => (flash ? { on: flash.on, battery: flash.battery } : null),
   monsters: () => (monsters ? monsters.monsters.size : 0),
+  monsterTypes: () => (monsters ? [...monsters.monsters.values()].map((m) => `${m.type}:${m.state}`) : []),
+  spawnMonster: (type, dx = 5, dz = 5) => (monsters ? monsters.spawnMonster(type, player.pos.x + dx, player.pos.z + dz).id : -1),
   remoteAnims: () => (remotePlayers ? [...remotePlayers.players.values()].map((p) => p.anim) : []),
   remoteY: () => (remotePlayers ? [...remotePlayers.players.values()].map((p) => p.cur.y) : []),
 };

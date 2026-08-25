@@ -62,6 +62,63 @@ export const MONSTER_TYPES = {
     keepDist: [18, 30], vision: 0, hearing: 0, attackRange: 0, lethal: false,
     lures: true,
   },
+  tallone: {
+    // 4.4m silhouette at the far end of a corridor. Posture snaps to a new
+    // pose whenever nobody is looking. Never attacks. Fear itself.
+    name: 'THE TALL ONE', speed: 0.7, aggroRange: 0, despawnLookAt: 3.2,
+    despawnDist: 340, voice: 'tallone', rarity: 0.05, privateOnly: false,
+    keepDist: [26, 110], vision: 0, hearing: 0, attackRange: 0, lethal: false,
+    farSpawn: true, flashReact: 'vanish', pack: 1,
+  },
+  hollow: {
+    // pale thin congregation figure with an empty face-hole. Freezes under
+    // the flashlight; lurches closer in the dark. Touching it = it was never
+    // there, but your heart disagrees.
+    name: 'THE HOLLOW', speed: 2.4, aggroRange: 6.5, despawnLookAt: 0,
+    despawnDist: 75, voice: 'hollow', rarity: 0.12, privateOnly: false,
+    keepDist: [0, 0], vision: 15, hearing: 9, attackRange: 1.2, lethal: false,
+    scareKill: true, pack: 3, flashReact: 'freeze', lurch: true, prefersDark: true,
+  },
+  bonefiend: {
+    // chalk-white wrong-jointed thing that hunts by sound. Moves in violent
+    // discrete snaps. Shining a light on it is a mistake.
+    name: 'THE BONE ONE', speed: 3.7, aggroRange: 22, despawnLookAt: 0,
+    despawnDist: 95, voice: 'bonefiend', rarity: 0.08, privateOnly: false,
+    keepDist: [0, 0], vision: 10, hearing: 26, attackRange: 1.0, lethal: true,
+    chaseGiveUp: 24, flashReact: 'enrage', lurch: true, pack: 1,
+  },
+  walldweller: {
+    // plaster-skinned, pressed flat into the wall. Nearly invisible while
+    // still; peels off and attacks when brushed past. The flashlight reveals it.
+    name: 'THE WALL DWELLER', speed: 2.7, aggroRange: 6.0, despawnLookAt: 0,
+    despawnDist: 75, voice: 'walldweller', rarity: 0.1, privateOnly: false,
+    keepDist: [0, 0], vision: 12, hearing: 14, attackRange: 1.0, lethal: true,
+    chaseGiveUp: 16, flashReact: 'reveal', prefersDark: true, wallHug: true, pack: 1,
+  },
+  deepone: {
+    // flooded levels only. A slick mass half under the waterline, only the
+    // head and reaching arms above. Light makes it submerge; dark makes it fast.
+    name: 'THE DEEP ONE', speed: 4.2, aggroRange: 13, despawnLookAt: 0,
+    despawnDist: 85, voice: 'deepone', rarity: 0.14, privateOnly: false,
+    keepDist: [0, 0], vision: 0, hearing: 22, attackRange: 1.1, lethal: true,
+    chaseGiveUp: 20, flashReact: 'vanish', levelOnly: 3, submerged: true, pack: 2,
+  },
+  ceiling: {
+    // hangs folded above your head. Tick tick tick. Stay underneath too long
+    // and it drops. Light persuades it to relocate.
+    name: 'THE CEILING THING', speed: 4.6, aggroRange: 3.4, despawnLookAt: 0,
+    despawnDist: 75, voice: 'ceiling', rarity: 0.09, privateOnly: false,
+    keepDist: [0, 0], vision: 0, hearing: 10, attackRange: 1.1, lethal: true,
+    chaseGiveUp: 15, flashReact: 'avoid', ceilingHug: true, pack: 1,
+  },
+  falseplayer: {
+    // the rarest thing in here. From far away it is one of your friends.
+    // Up close the walk is wrong. Then it runs at you on too many joints.
+    name: 'THE FALSE PLAYER', speed: 3.3, aggroRange: 9, despawnLookAt: 0,
+    despawnDist: 170, voice: 'falseplayer', rarity: 0.02, privateOnly: false,
+    keepDist: [0, 0], vision: 22, hearing: 14, attackRange: 1.0, lethal: true,
+    chaseGiveUp: 28, farSpawn: true, flashReact: 'reveal', pack: 1,
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -72,6 +129,37 @@ const darkFleshM = () => new THREE.MeshStandardMaterial({ color: 0x4a3f38, rough
 const voidM = () => new THREE.MeshStandardMaterial({ color: 0x07070a, roughness: 1 });
 const mouthM = () => new THREE.MeshStandardMaterial({ color: 0x0c0508, roughness: 0.4 });
 const eyeGlowM = () => new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xd8d2c2, emissiveIntensity: 0.55 });
+const wetBlackM = () => new THREE.MeshStandardMaterial({ color: 0x0d0f0c, roughness: 0.22, metalness: 0.1 });
+const boneM = () => new THREE.MeshStandardMaterial({ color: 0xd8d2c0, roughness: 0.5, metalness: 0.02 });
+const plasterM = () => new THREE.MeshStandardMaterial({ color: 0x8f8468, roughness: 0.92 });
+const hollowSkinM = () => new THREE.MeshStandardMaterial({ color: 0xb9b0a2, roughness: 0.78 });
+
+// long fingers: a fan of thin boxes drooping from a hand point
+function fingers(g, x, y, z, n, len, mat, spread = 0.05) {
+  const grp = new THREE.Group();
+  grp.position.set(x, y, z);
+  for (let i = 0; i < n; i++) {
+    const f = new THREE.Mesh(new THREE.BoxGeometry(0.02, len, 0.02), mat);
+    f.position.set((i - (n - 1) / 2) * spread, -len / 2, 0);
+    f.rotation.z = (i - (n - 1) / 2) * 0.12;
+    f.rotation.x = 0.15 + (i % 2) * 0.2;
+    grp.add(f);
+  }
+  g.add(grp);
+  return grp;
+}
+
+// a two-segment limb with a knee/elbow group. Returns {upper, joint}
+function limb2(r1, len1, r2, len2, mat, bend = 0) {
+  const upper = limb(r1, len1, mat);
+  const joint = new THREE.Group();
+  joint.position.y = -len1;
+  const lower = limb(r2, len2, mat);
+  lower.rotation.x = bend;
+  joint.add(lower);
+  upper.add(joint);
+  return { upper, joint, lower };
+}
 
 function seg(g, w, h, d, mat) {
   // limb segment hanging DOWN from its group origin
@@ -103,6 +191,7 @@ export function buildMonster(type) {
   const g = new THREE.Group();
   const u = g.userData;
   u.limbs = [];
+  u.detail = []; // small meshes hidden beyond LOD range
 
   switch (type) {
     case 'watcher': {
@@ -127,11 +216,21 @@ export function buildMonster(type) {
         const arm = seg(g, 0.09, 1.55, 0.09, skin);
         arm.position.set(0.26 * s + (s > 0 ? 0.03 : 0), 2.6, 0);
         arm.rotation.z = s * 0.07;
+        // long dragging fingers, slightly different on each hand
+        const hand = fingers(arm, 0, -1.55, 0, 5, 0.34 + (s > 0 ? 0.08 : 0), skin, 0.04);
+        u.detail.push(...hand.children);
         const leg = seg(g, 0.11, 1.45, 0.11, darkFleshM());
         leg.position.set(0.12 * s, 1.45, 0);
         if (s > 0) leg.scale.setScalar(1.12); // asymmetric legs
         g.add(arm, leg);
         u.limbs.push({ g: arm, kind: 'arm', side: s }, { g: leg, kind: 'leg', side: s });
+      }
+      // vertebrae nubs down the back — only visible up close
+      for (let i = 0; i < 5; i++) {
+        const v = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.06, 0.04), skin);
+        v.position.set(0, 1.6 + i * 0.24, -0.15);
+        g.add(v);
+        u.detail.push(v);
       }
       u.head = hd;
       g.add(body, hd);
@@ -180,12 +279,23 @@ export function buildMonster(type) {
       const e2 = e1.clone(); e2.position.set(0.07, 0.02, 0.135);
       hd.add(e1, e2);
       for (const s of [-1, 1]) {
-        const arm = seg(g, 0.08, s > 0 ? 1.35 : 1.0, 0.08, skin);
+        const armLen = s > 0 ? 1.35 : 1.0;
+        const arm = seg(g, 0.08, armLen, 0.08, skin);
         arm.position.set(0.24 * s, 2.25, 0);
+        // clawed reaching fingers on the long arm
+        const hand = fingers(arm, 0, -armLen, 0, 4, 0.26, skin, 0.045);
+        u.detail.push(...hand.children);
         const leg = seg(g, 0.1, 1.6, 0.1, darkFleshM());
         leg.position.set(0.12 * s, 1.58, 0);
         g.add(arm, leg);
         u.limbs.push({ g: arm, kind: 'arm', side: s }, { g: leg, kind: 'leg', side: s });
+      }
+      // sunken chest: rib slats over a hollow torso
+      for (let i = 0; i < 3; i++) {
+        const rib = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.035, 0.26), skin);
+        rib.position.y = 2.1 - i * 0.14;
+        g.add(rib);
+        u.detail.push(rib);
       }
       u.head = hd; u.jaw = jaw;
       g.add(body, hd);
@@ -388,6 +498,317 @@ export function buildMonster(type) {
         u.limbs.push({ g: arm, kind: 'arm', side: s });
       }
       u.torso = headG;
+      break;
+    }
+    case 'tallone': {
+      // 4.4m of wrong. Torso like a stretched curtain, arms that reach the
+      // floor and keep going, a head too small on a neck too long. Matte
+      // near-black with a faint wet sheen so the flashlight catches it.
+      const mat = new THREE.MeshStandardMaterial({ color: 0x14130f, roughness: 0.42, metalness: 0.08 });
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.24, 2.0, 0.16), mat);
+      body.position.y = 2.6;
+      g.add(body);
+      // faint rib ridges — visible only when the beam crosses it
+      for (let i = 0; i < 6; i++) {
+        const rib = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.03, 0.19), wetBlackM());
+        rib.position.y = 3.3 - i * 0.24;
+        g.add(rib);
+        u.detail.push(rib);
+      }
+      const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 0.55, 6), mat);
+      neck.position.y = 3.85;
+      g.add(neck);
+      const hd = new THREE.Group();
+      hd.position.set(0.02, 4.25, 0);
+      hd.rotation.z = 0.22; // permanently questioning
+      const skull = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.34, 0.19), mat);
+      hd.add(skull);
+      // no face. just a slightly darker vertical seam where one would be.
+      const seam = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.2, 0.01), voidM());
+      seam.position.set(0, 0, 0.096);
+      hd.add(seam);
+      u.detail.push(seam);
+      g.add(hd);
+      const arms = [];
+      for (const s of [-1, 1]) {
+        const { upper, joint } = limb2(0.05, 1.5, 0.04, 1.4, mat, s * 0.12);
+        upper.position.set(s * 0.16, 3.5, 0);
+        upper.rotation.z = s * 0.06;
+        g.add(upper);
+        const hand = fingers(joint, 0, -1.4, 0, 5, 0.55, mat, 0.045);
+        u.detail.push(...hand.children);
+        arms.push(upper);
+        u.limbs.push({ g: upper, kind: 'arm', side: s });
+        const leg = limb(0.06, 2.3, mat);
+        leg.position.set(s * 0.11, 2.3, 0);
+        g.add(leg);
+        u.limbs.push({ g: leg, kind: 'leg', side: s });
+      }
+      u.head = hd;
+      u.poseArms = arms;
+      // posture snap: discrete poses it holds while unobserved
+      u.poseIdx = 0;
+      u.setPose = (i) => {
+        u.poseIdx = i;
+        const P = [
+          [0.06, -0.06, 0.22],   // arms slack, head tilted
+          [0.35, -0.3, -0.15],   // arms slightly raised — was it always like that?
+          [-0.2, 0.25, 0.45],    // one arm half-lifted, head the other way
+          [0.0, 0.0, 0.0],       // perfectly straight. worst of all.
+        ][i % 4];
+        arms[0].rotation.z = P[0];
+        arms[1].rotation.z = P[1];
+        hd.rotation.z = P[2];
+      };
+      break;
+    }
+    case 'hollow': {
+      // 2m grey figure, arms hanging past the knees, and where the face
+      // should be: a smooth recess of nothing.
+      const skin = hollowSkinM();
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.2, 1.1, 8), skin);
+      body.position.y = 1.15;
+      body.rotation.x = 0.08; // stooped
+      g.add(body);
+      const hd = new THREE.Group();
+      hd.position.set(0, 1.82, 0.05);
+      hd.rotation.x = 0.3; // head bowed down
+      const skull = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 8), skin);
+      skull.scale.set(0.9, 1.3, 0.95);
+      hd.add(skull);
+      // the hollow: an inset black void for a face
+      const void_ = new THREE.Mesh(new THREE.SphereGeometry(0.085, 8, 6), voidM());
+      void_.position.set(0, 0.02, 0.09);
+      void_.scale.set(0.8, 1.15, 0.5);
+      hd.add(void_);
+      u.detail.push(void_);
+      g.add(hd);
+      for (const s of [-1, 1]) {
+        const arm = limb(0.045, 1.05, skin);
+        arm.position.set(s * 0.17, 1.62, 0.02);
+        arm.rotation.z = s * 0.05;
+        g.add(arm);
+        fingers(arm, 0, -1.05, 0, 4, 0.22, skin, 0.035);
+        u.limbs.push({ g: arm, kind: 'arm', side: s });
+        const leg = limb(0.05, 0.85, skin);
+        leg.position.set(s * 0.09, 0.85, 0);
+        if (s > 0) leg.rotation.x = 0.14; // one knee buckled wrong
+        g.add(leg);
+        u.limbs.push({ g: leg, kind: 'leg', side: s });
+      }
+      u.head = hd;
+      break;
+    }
+    case 'bonefiend': {
+      // chalk-white anatomy lesson gone wrong: visible spine, ribcage hoops,
+      // backwards knees, a skull with the jaw unhinged. Built to lurch.
+      const bone = boneM();
+      const pelvis = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.14, 0.18), bone);
+      pelvis.position.y = 0.98;
+      g.add(pelvis);
+      // spine: stacked knobs, slightly curved wrong
+      const spine = new THREE.Group();
+      for (let i = 0; i < 7; i++) {
+        const knob = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 5), bone);
+        knob.position.set(Math.sin(i * 0.7) * 0.05, 1.05 + i * 0.13, -0.02 - i * 0.015);
+        spine.add(knob);
+        u.detail.push(knob);
+      }
+      g.add(spine);
+      // ribcage: open hoops
+      for (let i = 0; i < 4; i++) {
+        const rib = new THREE.Mesh(new THREE.TorusGeometry(0.16 - i * 0.012, 0.016, 5, 10, Math.PI * 1.5), bone);
+        rib.position.y = 1.55 + i * 0.09;
+        rib.rotation.x = Math.PI / 2;
+        rib.rotation.z = Math.PI * 0.75;
+        g.add(rib);
+        u.detail.push(rib);
+      }
+      const hd = new THREE.Group();
+      hd.position.set(0.03, 2.1, 0.02);
+      const skull = new THREE.Mesh(new THREE.SphereGeometry(0.13, 9, 7), bone);
+      skull.scale.set(0.85, 1.15, 1.15);
+      hd.add(skull);
+      const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.16, 0.14), bone);
+      jaw.position.set(0, -0.16, 0.05);
+      jaw.rotation.x = 0.85; // unhinged
+      hd.add(jaw);
+      u.jaw = jaw;
+      const socket = new THREE.Mesh(new THREE.SphereGeometry(0.035, 6, 5), voidM());
+      socket.position.set(-0.05, 0.04, 0.1);
+      const socket2 = socket.clone(); socket2.position.set(0.06, 0.01, 0.1); socket2.scale.setScalar(0.7);
+      hd.add(socket, socket2); // asymmetric empty sockets
+      u.detail.push(socket, socket2);
+      g.add(hd);
+      for (const s of [-1, 1]) {
+        // backwards knees: thigh forward, shin bent BACK
+        const thigh = limb(0.045, 0.5, bone);
+        thigh.position.set(s * 0.11, 0.95, 0);
+        thigh.rotation.x = 0.25;
+        const knee = new THREE.Group(); knee.position.y = -0.5;
+        const shin = limb(0.035, 0.5, bone);
+        shin.rotation.x = -0.9; // wrong direction
+        knee.add(shin); thigh.add(knee);
+        g.add(thigh);
+        u.limbs.push({ g: thigh, kind: 'leg', side: s });
+        const arm = limb(0.035, 0.85, bone);
+        arm.position.set(s * 0.2, 1.78, 0);
+        arm.rotation.z = s * 0.3;
+        g.add(arm);
+        fingers(arm, 0, -0.85, 0, 5, 0.3, bone, 0.04);
+        u.limbs.push({ g: arm, kind: 'arm', side: s });
+      }
+      u.head = hd;
+      break;
+    }
+    case 'walldweller': {
+      // pressed flat: a wide, pancake-thin body the color of old wallpaper,
+      // limbs splayed like a pasted specimen, face turned sideways into the wall
+      const skin = plasterM();
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.3, 0.1), skin);
+      body.position.y = 1.4;
+      g.add(body);
+      // faint stain patterns so it reads as "wall damage" until it moves
+      for (let i = 0; i < 5; i++) {
+        const stain = new THREE.Mesh(new THREE.BoxGeometry(0.12 + (i % 3) * 0.07, 0.2, 0.02), darkFleshM());
+        stain.position.set(Math.sin(i * 2.3) * 0.25, 1.0 + i * 0.22, 0.06);
+        g.add(stain);
+        u.detail.push(stain);
+      }
+      const hd = new THREE.Group();
+      hd.position.set(0.1, 2.15, 0.02);
+      hd.rotation.y = Math.PI / 2.3; // face pressed sideways
+      const skull = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.34, 0.16), skin);
+      hd.add(skull);
+      const eye = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.02, 0.02), voidM());
+      eye.position.set(0, 0.06, 0.09);
+      hd.add(eye);
+      u.detail.push(eye);
+      g.add(hd);
+      for (const s of [-1, 1]) {
+        const arm = limb(0.05, 1.1, skin);
+        arm.position.set(s * 0.4, 1.9, 0);
+        arm.rotation.z = s * 1.15; // splayed up against the wall
+        g.add(arm);
+        u.limbs.push({ g: arm, kind: 'arm', side: s });
+        const leg = limb(0.06, 0.85, skin);
+        leg.position.set(s * 0.22, 0.85, 0);
+        leg.rotation.z = s * 0.45;
+        g.add(leg);
+        u.limbs.push({ g: leg, kind: 'leg', side: s });
+      }
+      u.head = hd;
+      break;
+    }
+    case 'deepone': {
+      // slick, eyeless, wide-mouthed; built to be half-seen above a waterline
+      const skin = wetBlackM();
+      const body = new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 8), skin);
+      body.scale.set(1, 1.25, 0.85);
+      body.position.y = 0.7;
+      g.add(body);
+      const hd = new THREE.Group();
+      hd.position.set(0, 1.35, 0.08);
+      const skull = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 8), skin);
+      skull.scale.set(1.15, 0.9, 1.05);
+      hd.add(skull);
+      // no eyes — just a wide lipless slit
+      const slit = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.035, 0.05), mouthM());
+      slit.position.set(0, -0.05, 0.2);
+      hd.add(slit);
+      u.jaw = slit;
+      g.add(hd);
+      for (const s of [-1, 1]) {
+        const arm = limb(0.06, 0.95, skin);
+        arm.position.set(s * 0.34, 1.0, 0.1);
+        arm.rotation.z = s * 0.55;
+        arm.rotation.x = -0.5; // reaching forward over the water
+        g.add(arm);
+        const hand = fingers(arm, 0, -0.95, 0, 4, 0.28, skin, 0.06);
+        for (const f of hand.children) f.scale.z = 2.2; // webbed, flattened
+        u.limbs.push({ g: arm, kind: 'arm', side: s });
+      }
+      // dorsal spines along the back
+      for (let i = 0; i < 4; i++) {
+        const sp = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.16 + i * 0.02, 5), skin);
+        sp.position.set(0, 0.75 + i * 0.18, -0.32);
+        sp.rotation.x = -0.5;
+        g.add(sp);
+        u.detail.push(sp);
+      }
+      u.head = hd;
+      break;
+    }
+    case 'ceiling': {
+      // hangs upside down: limbs folded up around an invisible grip, head
+      // dangling down, rotated 180° so the face is upright — which is worse
+      const skin = skinSicklyM();
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.7, 0.3), darkFleshM());
+      body.position.y = -0.35; // group origin sits at ceiling
+      g.add(body);
+      const hd = new THREE.Group();
+      hd.position.set(0, -0.85, 0.1);
+      hd.rotation.z = Math.PI; // inverted head
+      const skull = new THREE.Mesh(new THREE.SphereGeometry(0.15, 9, 7), skin);
+      skull.scale.set(0.9, 1.2, 0.9);
+      hd.add(skull);
+      const e1 = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.05, 0.02), eyeGlowM());
+      e1.position.set(-0.06, -0.03, 0.12);
+      const e2 = e1.clone(); e2.position.set(0.07, 0.01, 0.12);
+      hd.add(e1, e2); // eyes at wrong heights
+      u.detail.push(e1, e2);
+      g.add(hd);
+      for (const s of [-1, 1]) {
+        const arm = limb(0.045, 0.8, skin);
+        arm.position.set(s * 0.22, 0.05, 0);
+        arm.rotation.z = s * 2.6; // folded upward, gripping nothing
+        g.add(arm);
+        u.limbs.push({ g: arm, kind: 'arm', side: s });
+        const leg = limb(0.055, 0.9, skin);
+        leg.position.set(s * 0.15, -0.05, -0.1);
+        leg.rotation.z = s * 2.9;
+        leg.rotation.x = -0.4;
+        g.add(leg);
+        u.limbs.push({ g: leg, kind: 'leg', side: s });
+      }
+      u.head = hd;
+      u.upsideDown = true;
+      break;
+    }
+    case 'falseplayer': {
+      // almost your friend: right height, right jacket silhouette, a pale
+      // head. Arms 15% too long. No camera. No name. Up close, no eyes.
+      const jacketM = new THREE.MeshStandardMaterial({ color: 0x5c5648, roughness: 0.85 });
+      const paleM = new THREE.MeshStandardMaterial({ color: 0xc9bda9, roughness: 0.6 });
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.62, 0.24), jacketM);
+      body.position.y = 1.15;
+      g.add(body);
+      const hd = new THREE.Group();
+      hd.position.set(0, 1.62, 0);
+      const skull = new THREE.Mesh(new THREE.SphereGeometry(0.13, 9, 7), paleM);
+      hd.add(skull);
+      // the face only resolves when close: smooth, eyes shallow dents
+      for (const s of [-1, 1]) {
+        const dent = new THREE.Mesh(new THREE.SphereGeometry(0.025, 6, 5), mouthM());
+        dent.position.set(s * 0.05, 0.02, 0.11);
+        dent.scale.z = 0.4;
+        hd.add(dent);
+        u.detail.push(dent);
+      }
+      g.add(hd);
+      for (const s of [-1, 1]) {
+        const arm = limb(0.05, 0.78, jacketM); // too long for the body
+        arm.position.set(s * 0.24, 1.42, 0);
+        g.add(arm);
+        const hand = fingers(arm, 0, -0.78, 0, 4, 0.16, paleM, 0.035);
+        u.detail.push(...hand.children);
+        u.limbs.push({ g: arm, kind: 'arm', side: s });
+        const leg = limb(0.07, 0.85, darkFleshM());
+        leg.position.set(s * 0.11, 0.85, 0);
+        g.add(leg);
+        u.limbs.push({ g: leg, kind: 'leg', side: s });
+      }
+      u.head = hd;
       break;
     }
   }
