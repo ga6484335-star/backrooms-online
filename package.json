@@ -1,0 +1,22 @@
+{
+  "name": "backrooms-online",
+  "version": "1.0.0",
+  "description": "Multiplayer Backrooms found-footage horror game for the browser",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "test": "node test/multiplayer.test.js",
+    "test:browser": "node test/browser.test.js",
+    "test:2p": "node test/browser2p.test.js",
+    "test:all": "node test/multiplayer.test.js && node test/browser.test.js && node test/browser2p.test.js"
+  },
+  "keywords": ["backrooms", "horror", "multiplayer", "threejs", "websocket"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^5.2.1",
+    "three": "^0.185.1",
+    "ws": "^8.21.3"
+  }
+}

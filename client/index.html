@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<title>THE BACKROOMS — Found Footage</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23000'/><rect x='3' y='5' width='10' height='7' fill='%23d9b46c'/></svg>">
+<link rel="stylesheet" href="/css/style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "/vendor/three/build/three.module.js",
+    "three/addons/": "/vendor/three/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<!-- ======================= MAIN MENU ======================= -->
+<div id="menu" class="screen">
+  <canvas id="menu-static"></canvas>
+  <div class="menu-vignette"></div>
+  <div class="menu-inner">
+    <div class="menu-cam">
+      <span class="cam-label">&#9654; PLAY</span>
+      <span class="cam-sp">SP</span>
+    </div>
+    <h1 class="title"><span>THE</span>BACKROOMS</h1>
+    <div class="subtitle">FOUND FOOTAGE &mdash; DO NOT TRUST THE WALLS</div>
+    <div class="menu-buttons">
+      <input id="name-input" maxlength="16" placeholder="YOUR NAME" autocomplete="off" spellcheck="false">
+      <button id="btn-create" class="mbtn">CREATE ROOM</button>
+      <button id="btn-join" class="mbtn">JOIN ROOM</button>
+      <button id="btn-settings" class="mbtn">SETTINGS</button>
+    </div>
+    <div class="menu-foot">
+      <span id="menu-status">SIGNAL OK</span>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= JOIN PANEL ======================= -->
+<div id="join-panel" class="screen hidden">
+  <div class="panel">
+    <h2>JOIN ROOM</h2>
+    <div class="panel-sub">ENTER THE 6-CHARACTER CODE</div>
+    <input id="join-code" maxlength="6" placeholder="A7K9P2" autocomplete="off" spellcheck="false">
+    <div class="panel-row">
+      <button id="btn-join-go" class="mbtn">CONNECT</button>
+      <button id="btn-join-back" class="mbtn ghost">BACK</button>
+    </div>
+    <div id="join-error" class="error"></div>
+  </div>
+</div>
+
+<!-- ======================= SETTINGS ======================= -->
+<div id="settings-panel" class="screen hidden">
+  <div class="panel">
+    <h2>SETTINGS</h2>
+    <div class="setting-row"><label>GRAPHICS QUALITY</label>
+      <select id="set-quality">
+        <option value="low">LOW</option>
+        <option value="medium">MEDIUM</option>
+        <option value="high">HIGH</option>
+        <option value="ultra">ULTRA</option>
+      </select>
+    </div>
+    <div class="setting-row"><label>MOUSE SENSITIVITY</label>
+      <input id="set-sens" type="range" min="0.2" max="3" step="0.1" value="1">
+    </div>
+    <div class="setting-row"><label>VOLUME</label>
+      <input id="set-volume" type="range" min="0" max="1" step="0.05" value="0.8">
+    </div>
+    <div class="setting-row"><label>VHS EFFECTS</label>
+      <select id="set-vhs"><option value="1">ON</option><option value="0">OFF</option></select>
+    </div>
+    <div class="setting-row"><label>FULLSCREEN</label>
+      <button id="set-fullscreen" class="mbtn small">TOGGLE</button>
+    </div>
+    <div class="panel-row"><button id="btn-settings-back" class="mbtn ghost">BACK</button></div>
+  </div>
+</div>
+
+<!-- ======================= LOBBY ======================= -->
+<div id="lobby" class="screen hidden">
+  <canvas id="lobby-static"></canvas>
+  <div class="menu-vignette"></div>
+  <div class="panel lobby-panel">
+    <div class="lobby-label">ROOM CODE</div>
+    <div id="lobby-code" class="lobby-code">------</div>
+    <div id="lobby-count" class="lobby-count">PLAYERS: 1/8</div>
+    <ul id="lobby-players" class="lobby-players"></ul>
+    <div class="setting-row"><label>LEVEL</label>
+      <select id="lobby-level">
+        <option value="0">LEVEL 0 — THE LOBBY</option>
+        <option value="1">LEVEL 1 — MAINTENANCE</option>
+        <option value="2">LEVEL 2 — PIPEWORKS</option>
+        <option value="3">LEVEL 3 — THE FLOOD</option>
+        <option value="4">LEVEL 4 — OFFICE</option>
+        <option value="5">LEVEL 5 — HOTEL</option>
+        <option value="-1">RANDOM</option>
+      </select>
+    </div>
+    <div class="panel-row">
+      <button id="btn-start" class="mbtn">START</button>
+      <button id="btn-leave-lobby" class="mbtn ghost">LEAVE</button>
+    </div>
+    <div class="lobby-hint">SHARE THE CODE. UP TO 8 EXPLORERS.</div>
+  </div>
+</div>
+
+<!-- ======================= GAME HUD ======================= -->
+<div id="game-ui" class="hidden">
+  <div class="camcorder">
+    <div class="cc-top">
+      <span id="rec-dot">&#9679;</span> <span class="cc-label">REC</span>
+      <span id="timecode">00:00:00</span>
+      <span class="cc-sp">SP</span>
+    </div>
+    <div class="cc-bottom">
+      <span id="cc-level">LEVEL 0</span>
+      <span id="cc-room"></span>
+      <span id="cc-batt">&#9646;&#9646;&#9646;&#9646;</span>
+    </div>
+  </div>
+  <div id="crosshair"></div>
+  <div id="interact-prompt" class="hidden">[ E ] <span id="interact-text">OPEN</span></div>
+  <div id="players-hud"></div>
+  <div id="event-text" class="hidden"></div>
+  <div id="emote-bar">
+    <button data-emote="wave">WAVE</button>
+    <button data-emote="point">POINT</button>
+    <button data-emote="laugh">LAUGH</button>
+    <button data-emote="sit">SIT</button>
+    <button data-emote="scared">SCARED</button>
+    <button data-emote="dance" class="dance">DANCE</button>
+  </div>
+</div>
+
+<!-- ======================= MOBILE CONTROLS ======================= -->
+<div id="mobile-controls" class="hidden">
+  <div id="joy-zone"><div id="joy-base"><div id="joy-stick"></div></div></div>
+  <div id="look-zone"></div>
+  <div class="mbtns">
+    <button id="mb-run">RUN</button>
+    <button id="mb-interact">INTERACT</button>
+    <button id="mb-emote">EMOTE</button>
+    <button id="mb-dance">DANCE</button>
+  </div>
+  <button id="mb-menu">&#8801;</button>
+</div>
+
+<!-- ======================= NOTE OVERLAY ======================= -->
+<div id="note-overlay" class="hidden">
+  <div class="note-paper"><div id="note-text"></div><div class="note-close">[ E ] CLOSE</div></div>
+</div>
+
+<div id="pause-overlay" class="hidden">
+  <div class="panel">
+    <h2>PAUSED</h2>
+    <div class="panel-row"><button id="btn-resume" class="mbtn">RESUME</button></div>
+    <div class="panel-row"><button id="btn-quit" class="mbtn ghost">LEAVE ROOM</button></div>
+  </div>
+</div>
+
+<div id="fade"></div>
+<div id="boot-msg">ESTABLISHING SIGNAL…</div>
+
+<script type="module" src="/js/main.js"></script>
+</body>
+</html>
