@@ -5,9 +5,13 @@ import * as THREE from 'three';
 import { CELL } from './worldgen.js';
 
 const EYE = 1.62;
+const SIT_EYE = 1.0;
 const RADIUS = 0.32;
 const WALK = 2.6;
 const RUN = 5.2;
+const GRAVITY = -13.5;
+const JUMP_VEL = 3.6;      // low, realistic hop — clears debris, not structures
+const JUMP_COOLDOWN = 0.35;
 
 export function isMobile() {
   const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
@@ -38,12 +42,49 @@ export class PlayerController {
     this.anim = 'idle';
     this.emote = '';
     this.emoteT = 0;
-    this.sitting = false;
+    // player posture state machine: 'standing' | 'sitting'. NEVER anything else.
+    this.state = 'standing';
     this.colliderBuf = [];
     this.dead = false;
     this.flashOn = 0;
+    // vertical physics (jump)
+    this.yOff = 0;           // height above ground
+    this.vy = 0;
+    this.grounded = true;
+    this.jumpCd = 0;
+    this.landDip = 0;        // camera dip on landing
 
     if (!this.mobile) this._bindDesktop();
+  }
+
+  get sitting() { return this.state === 'sitting'; }
+
+  // sit/stand toggle — ALWAYS reversible. Any failure path returns to standing.
+  toggleSit() {
+    if (this.dead) return;
+    if (this.state === 'sitting') this.standUp();
+    else this.sitDown();
+  }
+
+  sitDown() {
+    if (this.dead || this.state === 'sitting') return;
+    this.state = 'sitting';
+    this.emote = 'sit';
+    this.emoteT = 1e9; // posture persists until explicitly ended
+  }
+
+  standUp() {
+    this.state = 'standing';
+    if (this.emote === 'sit') this.emote = '';
+    this.emoteT = Math.min(this.emoteT, 2.6);
+  }
+
+  jump() {
+    if (this.dead || !this.grounded || this.jumpCd > 0 || this.state === 'sitting') return false;
+    this.vy = JUMP_VEL;
+    this.grounded = false;
+    this.jumpCd = JUMP_COOLDOWN;
+    return true;
   }
 
   _bindDesktop() {
@@ -51,6 +92,7 @@ export class PlayerController {
       if (!this.enabled) return;
       this.keys.add(e.code);
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.running = true;
+      if (e.code === 'Space') { this.jump(); e.preventDefault(); }
     });
     window.addEventListener('keyup', (e) => {
       this.keys.delete(e.code);
@@ -73,6 +115,7 @@ export class PlayerController {
   teleport(x, z) {
     this.pos.set(x, EYE, z);
     this.vel.set(0, 0, 0);
+    this.yOff = 0; this.vy = 0; this.grounded = true; this.jumpCd = 0;
   }
 
   // current noise signature in meters (how far footsteps carry)
@@ -87,6 +130,14 @@ export class PlayerController {
 
   update(dt, world, worldMgr) {
     if (!this.enabled) return;
+
+    // ---- catastrophic state safety: NaN / undefined position recovery ----
+    if (!Number.isFinite(this.pos.x) || !Number.isFinite(this.pos.z) || !Number.isFinite(this.yaw)) {
+      this.pos.set(2, EYE, 2);
+      this.yaw = this.yawTarget = 0; this.pitch = this.pitchTarget = 0;
+      this.vel.set(0, 0, 0);
+      this.yOff = 0; this.vy = 0; this.grounded = true;
+    }
 
     // ---- input vector ----
     let ix = 0, iz = 0;
@@ -108,6 +159,9 @@ export class PlayerController {
     const inputMag = Math.min(1, Math.hypot(ix, iz));
     const moving = inputMag > 0.05;
 
+    // any movement input while sitting automatically stands you up
+    if (this.sitting && moving) this.standUp();
+
     // smooth turning with inertia
     const turnSpeed = 14;
     this.yaw += (this.yawTarget - this.yaw) * Math.min(1, dt * turnSpeed);
@@ -128,6 +182,21 @@ export class PlayerController {
     this.vel.x += (tx - this.vel.x) * Math.min(1, dt * accel);
     this.vel.z += (tz - this.vel.z) * Math.min(1, dt * accel);
 
+    // ---- vertical physics (jump / gravity / landing) ----
+    if (this.jumpCd > 0) this.jumpCd -= dt;
+    if (!this.grounded) {
+      this.vy += GRAVITY * dt;
+      this.yOff += this.vy * dt;
+      if (this.yOff <= 0) {
+        this.yOff = 0;
+        this.grounded = true;
+        this.vy = 0;
+        this.landDip = 0.09;            // camera dip on landing
+        this.shake = Math.min(1, this.shake + 0.12);
+      }
+    }
+    this.landDip = Math.max(0, this.landDip - dt * 0.5);
+
     // integrate + collide (axis separated for sliding)
     const nx = this.pos.x + this.vel.x * dt;
     const nz = this.pos.z + this.vel.z * dt;
@@ -139,6 +208,7 @@ export class PlayerController {
     const spd = this.speedSmooth;
     this.anim = spd > 4 ? 'run' : spd > 0.3 ? 'walk' : 'idle';
     if (this.sitting) this.anim = 'sit';
+    else if (!this.grounded) this.anim = 'jump';
 
     // ---- camcorder ----
     this.bobT += dt * (3 + spd * 2.2);
@@ -167,11 +237,10 @@ export class PlayerController {
       this.camera.updateProjectionMatrix();
     }
 
-    // emote handling (sit adjusts eye height; others are avatar-only)
-    if (this.emoteT > 0) {
+    // emote handling (sit is posture-managed; others are avatar-only, timed)
+    if (this.emoteT > 0 && this.emoteT < 1e8) {
       this.emoteT -= dt;
       if (this.emoteT <= 0) {
-        if (this.emote === 'sit') this.sitting = false;
         this.emote = '';
       }
     }
@@ -180,7 +249,7 @@ export class PlayerController {
     const eyeH = this.eyeHeight();
     this.camera.position.set(
       this.pos.x + bobX * 0.3,
-      eyeH + bobY + Math.sin(t * 0.8) * 0.004,
+      eyeH + this.yOff + bobY + Math.sin(t * 0.8) * 0.004 - this.landDip,
       this.pos.z
     );
     this.camera.rotation.order = 'YXZ';
@@ -188,9 +257,8 @@ export class PlayerController {
     this.camera.rotation.x = this.pitch + swayPitch + my;
     this.camera.rotation.z = swayRoll * 0.6 + bobX * 0.15;
 
-    // NOTE: this.pos.y stores the eye height target for networking;
-    // we keep it constant-ish here (flat world for now)
-    this.pos.y = eyeH;
+    // pos.y = networked eye height (includes jump offset so remotes see hops)
+    this.pos.y = eyeH + this.yOff;
   }
 
   collideAxis(x, z, cols, isX) {
@@ -220,9 +288,22 @@ export class PlayerController {
   }
 
   triggerEmote(e) {
+    if (this.dead) return;
+    if (e === 'sit') { this.toggleSit(); return; }
+    if (this.sitting) this.standUp(); // any other emote returns to standing
     this.emote = e;
-    this.emoteT = e === 'dance' ? 8 : e === 'sit' ? 600 : 2.6;
-    if (e === 'sit') { this.sitting = true; this.emoteT = 600; }
+    this.emoteT = e === 'dance' ? 8 : 2.6;
+  }
+
+  // full state reset (death, respawn, level transition) — never leaves a
+  // broken posture: ALWAYS returns to standing.
+  resetState() {
+    this.standUp();
+    this.emote = '';
+    this.emoteT = 0;
+    this.yOff = 0; this.vy = 0; this.grounded = true; this.jumpCd = 0;
+    this.landDip = 0;
+    this.vel.set(0, 0, 0);
   }
 
   trauma(a) { this.shake = Math.min(1, this.shake + a); }

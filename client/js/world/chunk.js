@@ -39,11 +39,35 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
       const wz = cz * CELL;
       const tint = cell.tint * (1 - (cell.damage || 0) * 0.35);
 
-      // floor
+      // floor — patterned variants (checker / border inlay) break repetition
       const floorCol = cell.water ? [20, 40, 38] : levelDef.palette.floor;
-      gb.quad(
-        [[wx, 0, wz], [wx + CELL, 0, wz], [wx + CELL, 0, wz + CELL], [wx, 0, wz + CELL]],
-        [0, 1, 0], scaleColor(floorCol, tint), [[0, 0], [1, 0], [1, 1], [0, 1]]);
+      if (cell.floorPattern === 1) {
+        // 2x2 checkerboard with alternating wear
+        const h = CELL / 2;
+        for (let fx = 0; fx < 2; fx++) {
+          for (let fz = 0; fz < 2; fz++) {
+            const alt = (fx + fz) % 2 === 0 ? 0.82 : 1.0;
+            gb.quad(
+              [[wx + fx * h, 0, wz + fz * h], [wx + (fx + 1) * h, 0, wz + fz * h],
+               [wx + (fx + 1) * h, 0, wz + (fz + 1) * h], [wx + fx * h, 0, wz + (fz + 1) * h]],
+              [0, 1, 0], scaleColor(floorCol, tint * alt), [[0, 0], [0.5, 0], [0.5, 0.5], [0, 0.5]]);
+          }
+        }
+      } else if (cell.floorPattern === 2) {
+        // border inlay: darker frame around a lighter centre
+        const b = CELL * 0.18;
+        gb.quad(
+          [[wx, 0, wz], [wx + CELL, 0, wz], [wx + CELL, 0, wz + CELL], [wx, 0, wz + CELL]],
+          [0, 1, 0], scaleColor(floorCol, tint * 0.78), [[0, 0], [1, 0], [1, 1], [0, 1]]);
+        gb.quad(
+          [[wx + b, 0.005, wz + b], [wx + CELL - b, 0.005, wz + b],
+           [wx + CELL - b, 0.005, wz + CELL - b], [wx + b, 0.005, wz + CELL - b]],
+          [0, 1, 0], scaleColor(floorCol, tint), [[0, 0], [1, 0], [1, 1], [0, 1]]);
+      } else {
+        gb.quad(
+          [[wx, 0, wz], [wx + CELL, 0, wz], [wx + CELL, 0, wz + CELL], [wx, 0, wz + CELL]],
+          [0, 1, 0], scaleColor(floorCol, tint), [[0, 0], [1, 0], [1, 1], [0, 1]]);
+      }
 
       // ceiling (damaged cells sometimes get a missing/darker ceiling patch)
       const ceilY = cell.ceilH;
@@ -59,6 +83,23 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
         const alongX = chance(cell.propRng, 0.5);
         if (alongX) gb.box(CELL, cell.ceilDrop, 1.1, wx + CELL / 2, sy, wz + CELL / 2, scol);
         else gb.box(1.1, cell.ceilDrop, CELL, wx + CELL / 2, sy, wz + CELL / 2, scol);
+      }
+
+      // hanging wires in damaged cells — torn cables drooping from the ceiling
+      if (cell.damage > 0.45 && chance(cell.propRng, 0.6)) {
+        const nWires = 1 + ((cell.surfaceVariant * 3) | 0);
+        for (let w = 0; w < nWires; w++) {
+          const wr = rngFrom(hashStr(world.seed, `wire:${cx},${cz}:${w}`));
+          const x0 = wx + 0.5 + wr() * (CELL - 1), z0 = wz + 0.5 + wr() * (CELL - 1);
+          const len = 0.4 + wr() * 0.9;
+          const sag = 0.15 + wr() * 0.25;
+          const col = [30, 26, 24];
+          // two segments per wire (hanging V shape)
+          gb.quad([[x0, ceilY, z0], [x0 + 0.03, ceilY, z0], [x0 + sag + 0.03, ceilY - len, z0 + sag], [x0 + sag, ceilY - len, z0 + sag]],
+            [0, 0, 1], col, [[0, 0], [1, 0], [1, 1], [0, 1]]);
+          gb.quad([[x0 + sag, ceilY - len, z0 + sag], [x0 + sag + 0.03, ceilY - len, z0 + sag], [x0 + sag * 2 + 0.03, ceilY - len + sag * 0.5, z0 + sag * 2], [x0 + sag * 2, ceilY - len + sag * 0.5, z0 + sag * 2]],
+            [0, 0, 1], col, [[0, 0], [1, 0], [1, 1], [0, 1]]);
+        }
       }
 
       // walls (dirs 0 and 1 only to avoid duplicates)
@@ -93,6 +134,18 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
             hw: dir === 0 ? 0.13 : CELL / 2,
             hd: dir === 1 ? 0.13 : CELL / 2,
           });
+          // alcove: a shallow recessed niche in some solid walls
+          if (cell.alcove && chance(cell.propRng, 0.5)) {
+            const aw = 1.1, ah = 1.6, ay = 0.55;
+            const acol = scaleColor(levelDef.palette.wall, tint * 0.35);
+            if (dir === 0) {
+              gb.box(0.1, ah, aw, wx + CELL - 0.1, ay, wz + CELL / 2, acol);
+              gb.box(0.16, 0.08, aw + 0.2, wx + CELL - 0.05, ay + ah, wz + CELL / 2, wcol); // lintel
+            } else {
+              gb.box(aw, ah, 0.1, wx + CELL / 2, ay, wz + CELL - 0.1, acol);
+              gb.box(aw + 0.2, 0.08, 0.16, wx + CELL / 2, ay + ah, wz + CELL - 0.05, wcol);
+            }
+          }
         }
       }
 

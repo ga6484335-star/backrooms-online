@@ -119,6 +119,19 @@ export class MobileControls {
       if (this.onFlash) { this.onFlash(); fb.classList.toggle('on'); }
     }, { passive: false });
 
+    document.getElementById('mb-jump').addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      this.player.jump();
+    }, { passive: false });
+
+    const sb = document.getElementById('mb-sit');
+    sb.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      this.onEmote('sit'); // toggle: sit → stand
+      sb.classList.toggle('on', this.player.sitting);
+      sb.textContent = this.player.sitting ? 'STAND' : 'SIT';
+    }, { passive: false });
+
     document.getElementById('mb-menu').addEventListener('touchstart', (e) => {
       e.preventDefault();
       this.onMenu();

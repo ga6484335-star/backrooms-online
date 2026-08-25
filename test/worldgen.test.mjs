@@ -101,6 +101,44 @@ const { buildMonster, MONSTER_TYPES } = await import("../client/js/monsters/defs
   ok(MONSTER_TYPES.hunter.lethal, "hunter is lethal");
   ok(MONSTER_TYPES.ambusher.lethal, "ambusher is lethal");
   ok(!MONSTER_TYPES.watcher.lethal, "watcher is not lethal");
+  ok(TYPE_IDS.length >= 9, `at least 9 monster types (${TYPE_IDS.length})`);
+  ok(TYPE_IDS.includes("runner") && TYPE_IDS.includes("crawler") && TYPE_IDS.includes("siren"), "runner/crawler/siren exist");
+  ok(MONSTER_TYPES.runner.lethal && MONSTER_TYPES.runner.speed >= 6, "runner is fast + lethal");
+  ok(MONSTER_TYPES.crawler.lethal, "crawler is lethal");
+  ok(!MONSTER_TYPES.siren.lethal && MONSTER_TYPES.siren.lures, "siren lures but never kills");
+}
+
+// ---------- new monster behaviors ----------
+{
+  const fakeScene = { add() {}, remove() {} };
+  const w = new WorldModel(777, 1);
+  const fakeMgr = { monstersSpawnCell: () => [3, 3] };
+  const fakeAudio = new Proxy({}, { get: () => () => {} });
+  const sys = new MonsterSystem(fakeScene, w, fakeMgr, fakeAudio, null, () => true);
+  sys.getLightAt = () => 0.2; // dark
+
+  // runner: dormant until seen close, then chases
+  const r = sys.spawnMonster("runner", 0, 0);
+  sys.updateHost(r, 0.1, [{ id: -1, x: 40, z: 40, anim: "idle", fl: 0, dead: false }]);
+  ok(r.state === "dormant", `runner stays dormant when player is far (${r.state})`);
+  // force close + lit detection
+  sys.getLightAt = () => 0.9;
+  sys.updateHost(r, 0.1, [{ id: -1, x: 4, z: 0, anim: "run", fl: 1, dead: false }]);
+  ok(["chase", "attack", "cooldown"].includes(r.state), `runner engages when seen close (${r.state})`);
+
+  // siren: approaches to keep distance, gone when player closes in
+  const s = sys.spawnMonster("siren", 0, 0);
+  sys.updateHost(s, 0.1, [{ id: -1, x: 25, z: 0, anim: "walk", fl: 0, dead: false }]);
+  ok(["watch", "idle"].includes(s.state), `siren watches from range (${s.state})`);
+  sys.updateHost(s, 0.1, [{ id: -1, x: 3, z: 0, anim: "walk", fl: 0, dead: false }]);
+  ok(s.state === "gone", "siren vanishes when approached");
+
+  // crawler: patrols, lunges in darkness at close range
+  const c = sys.spawnMonster("crawler", 0, 0);
+  sys.getLightAt = () => 0.1; // dark
+  sys.updateHost(c, 0.1, [{ id: -1, x: 2, z: 0, anim: "walk", fl: 0, dead: false }]);
+  sys.updateHost(c, 0.1, [{ id: -1, x: 2, z: 0, anim: "walk", fl: 0, dead: false }]);
+  ok(["chase", "attack", "cooldown", "patrol"].includes(c.state), `crawler behaves in the dark (${c.state})`);
 }
 
 // ---------- AI state machine (host) ----------

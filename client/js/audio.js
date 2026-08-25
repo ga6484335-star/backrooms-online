@@ -271,6 +271,63 @@ export class AudioEngine {
         o.connect(g); o.start(t); o.stop(t + 4.4);
         break;
       }
+      case 'crawler': {
+        // rapid chittering clicks
+        const src = ctx.createBufferSource(); src.buffer = this._noiseBuf;
+        src.playbackRate.value = 2.4;
+        const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 3200; f.Q.value = 6;
+        const lfo = ctx.createOscillator(); lfo.frequency.value = 22;
+        const lg = ctx.createGain(); lg.gain.value = 0.12 * intensity;
+        lfo.connect(lg).connect(g.gain);
+        this._env(g, t, 0.04, 0.9, 0.14 * intensity);
+        src.connect(f).connect(g); src.start(t, Math.random(), 1.0);
+        lfo.start(t); lfo.stop(t + 1);
+        break;
+      }
+      case 'siren': {
+        // a distant, almost-musical wail — wrong notes, drifting pitch
+        const o = ctx.createOscillator(); o.type = 'sine';
+        o.frequency.setValueAtTime(392, t);
+        o.frequency.linearRampToValueAtTime(415, t + 1.4);
+        o.frequency.linearRampToValueAtTime(370, t + 2.8);
+        const o2 = ctx.createOscillator(); o2.type = 'sine';
+        o2.frequency.setValueAtTime(392 * 1.06, t); // beating detune
+        o2.frequency.linearRampToValueAtTime(440, t + 2.8);
+        this._env(g, t, 1.6, 3.4, 0.16 * intensity);
+        o.connect(g); o2.connect(g);
+        o.start(t); o.stop(t + 5.2); o2.start(t); o2.stop(t + 5.2);
+        break;
+      }
+      case 'hunter': {
+        // low guttural growl with pitch drop
+        const o = ctx.createOscillator(); o.type = 'sawtooth';
+        o.frequency.setValueAtTime(90, t);
+        o.frequency.exponentialRampToValueAtTime(48, t + 0.9);
+        const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 320; f.Q.value = 3;
+        this._env(g, t, 0.12, 1.0, 0.4 * intensity);
+        o.connect(f).connect(g); o.start(t); o.stop(t + 1.3);
+        break;
+      }
+      case 'ambusher': {
+        // sudden wet screech
+        const o = ctx.createOscillator(); o.type = 'square';
+        o.frequency.setValueAtTime(1400, t);
+        o.frequency.exponentialRampToValueAtTime(300, t + 0.35);
+        const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1000; f.Q.value = 1.5;
+        this._env(g, t, 0.02, 0.5, 0.35 * intensity);
+        o.connect(f).connect(g); o.start(t); o.stop(t + 0.6);
+        break;
+      }
+      case 'mimic': {
+        // furniture creaking the wrong way
+        const o = ctx.createOscillator(); o.type = 'sawtooth';
+        o.frequency.setValueAtTime(70, t);
+        o.frequency.linearRampToValueAtTime(160, t + 0.7);
+        const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 500; f.Q.value = 5;
+        this._env(g, t, 0.1, 0.8, 0.2 * intensity);
+        o.connect(f).connect(g); o.start(t); o.stop(t + 1.0);
+        break;
+      }
     }
   }
 
@@ -298,6 +355,43 @@ export class AudioEngine {
     const p = this.panner(x, 1.2, z);
     o.connect(f).connect(g).connect(p).connect(this.master);
     o.start(t); o.stop(t + 1.2);
+  }
+
+  doorSlam(x, z) {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const p = this.panner(x, 1.2, z);
+    // low boom + rattle
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(110, t);
+    o.frequency.exponentialRampToValueAtTime(38, t + 0.22);
+    const g = ctx.createGain();
+    this._env(g, t, 0.005, 0.5, 0.55);
+    o.connect(g).connect(p).connect(this.master);
+    o.start(t); o.stop(t + 0.6);
+    const src = ctx.createBufferSource(); src.buffer = this._noiseBuf;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 1.2;
+    const g2 = ctx.createGain();
+    this._env(g2, t + 0.02, 0.005, 0.3, 0.2);
+    src.connect(f).connect(g2).connect(p).connect(this.master);
+    src.start(t, Math.random(), 0.4);
+  }
+
+  metalClatter(x, z) {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const p = this.panner(x, 1.0, z);
+    for (let i = 0; i < 3 + ((Math.random() * 3) | 0); i++) {
+      const dt = i * (0.06 + Math.random() * 0.09);
+      const src = ctx.createBufferSource(); src.buffer = this._noiseBuf;
+      src.playbackRate.value = 1.2 + Math.random() * 1.4;
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass';
+      f.frequency.value = 1400 + Math.random() * 2400; f.Q.value = 7;
+      const g = ctx.createGain();
+      this._env(g, t + dt, 0.003, 0.16, 0.16 * (1 - i * 0.18));
+      src.connect(f).connect(g).connect(p).connect(this.master);
+      src.start(t + dt, Math.random(), 0.2);
+    }
   }
 
   paper() {

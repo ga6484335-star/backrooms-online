@@ -250,6 +250,8 @@ export class WorldModel {
       noteSpawn: chance(rng, 0.006),       // rare readable notes
       batterySpawn: chance(rng, 0.011),    // flashlight batteries lying around
       surfaceVariant: rng(),
+      floorPattern: chance(rng, 0.4) ? (rng() * 3) | 0 : 0, // 0 plain, 1 checker, 2 inlay
+      alcove: chance(rng, 0.09),           // recessed niche in a solid wall
     };
     this.cellCache.set(key, cell);
     return cell;

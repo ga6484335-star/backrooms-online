@@ -9,19 +9,19 @@ import * as THREE from 'three';
 import { CELL, bfsPath } from '../worldgen.js';
 import { buildMonster, MONSTER_TYPES } from './defs.js';
 
-export const TYPE_IDS = ['watcher', 'stalker', 'hunter', 'ambusher', 'mimic', 'shadow'];
+export const TYPE_IDS = ['watcher', 'stalker', 'hunter', 'ambusher', 'mimic', 'shadow', 'runner', 'crawler', 'siren'];
 
-// which monsters a level can produce
+// which monsters a level can produce (duplicates = weight)
 const LEVEL_POOLS = [
-  ['watcher', 'watcher', 'stalker', 'hunter', 'mimic'],
-  ['stalker', 'watcher', 'hunter', 'ambusher', 'ambusher', 'mimic'],
-  ['hunter', 'ambusher', 'ambusher', 'stalker', 'mimic'],
-  ['watcher', 'ambusher', 'stalker', 'mimic'],
-  ['stalker', 'stalker', 'mimic', 'mimic', 'hunter'],
-  ['watcher', 'stalker', 'stalker', 'mimic', 'hunter'],
+  ['watcher', 'watcher', 'stalker', 'hunter', 'mimic', 'siren'],
+  ['stalker', 'watcher', 'hunter', 'ambusher', 'ambusher', 'mimic', 'crawler', 'crawler'],
+  ['hunter', 'ambusher', 'ambusher', 'stalker', 'mimic', 'crawler', 'runner'],
+  ['watcher', 'ambusher', 'stalker', 'mimic', 'siren', 'siren'],
+  ['stalker', 'stalker', 'mimic', 'mimic', 'hunter', 'runner'],
+  ['watcher', 'stalker', 'stalker', 'mimic', 'hunter', 'siren', 'runner'],
 ];
 // hard caps so the world never fills with monsters
-const CAPS = { watcher: 1, stalker: 1, hunter: 1, ambusher: 2, mimic: 2 };
+const CAPS = { watcher: 1, stalker: 1, hunter: 1, ambusher: 2, mimic: 2, runner: 1, crawler: 2, siren: 1 };
 
 const HEAR_WALK = 8, HEAR_RUN = 24;
 
@@ -47,10 +47,20 @@ export class MonsterSystem {
     this.dwellCell = '';
     this.dwellT = 0;
 
+    // horror director inputs, fed from the main loop
+    this.director = { distance: 0, timePlayed: 0, deaths: 0, players: 1 };
+
     this.hallucTimer = 50 + Math.random() * 60;
   }
 
   bind(getPlayers) { this.getPlayers = getPlayers; }
+
+  // a player died: force a quiet mourning period — horror needs rhythm
+  notifyDeath() {
+    this.director.deaths++;
+    this.pacing = 'cooldown';
+    this.pacingT = 75 + Math.random() * 45;
+  }
 
   // ------------------------------------------------------------- spawning
   hostSpawnLogic(dt, player, players) {
@@ -70,15 +80,23 @@ export class MonsterSystem {
       case 'uneasy':
         if (this.pacingT <= 0) {
           const active = [...this.monsters.values()].filter((m) => !m.private);
-          const playerCount = 1 + (players ? players.length : 0);
+          const playerCount = this.director.players || (1 + (players ? players.length : 0));
           const darkness = 1 - this.getLightAt(player.pos.x, player.pos.z);
           const noise = player.anim === 'run' ? 0.15 : player.anim === 'walk' ? 0.05 : 0;
           const dwell = Math.min(0.25, this.dwellT / 120 * 0.25);
           const crowd = Math.min(0.15, playerCount * 0.03);
-          const chanceOf = 0.35 + darkness * 0.2 + noise + dwell + crowd - active.length * 0.25;
+          // distance-based escalation: the deeper you travel, the hungrier it gets
+          const dist = this.director.distance;
+          const depthBonus = dist < 120 ? -0.25 : dist < 400 ? 0 : Math.min(0.2, (dist - 400) / 2000);
+          const chanceOf = 0.35 + darkness * 0.2 + noise + dwell + crowd + depthBonus - active.length * 0.25;
           if (Math.random() < chanceOf) {
             const pool = LEVEL_POOLS[this.world.level] || LEVEL_POOLS[0];
             let type = pool[(Math.random() * pool.length) | 0];
+            // early exploration stays mostly quiet: nothing lethal in the
+            // first ~120 metres so players learn the world first
+            if (dist < 120 && MONSTER_TYPES[type] && MONSTER_TYPES[type].lethal) {
+              type = Math.random() < 0.5 ? 'watcher' : 'stalker';
+            }
             // respect caps
             const countOf = (t) => active.filter((m) => m.type === t).length;
             for (let tries = 0; tries < 4 && countOf(type) >= (CAPS[type] || 1); tries++) {
@@ -265,6 +283,9 @@ export class MonsterSystem {
       case 'hunter': this.aiHunter(m, dt, det); break;
       case 'ambusher': this.aiAmbusher(m, dt, det); break;
       case 'mimic': this.aiMimic(m, dt, det); break;
+      case 'runner': this.aiRunner(m, dt, det); break;
+      case 'crawler': this.aiCrawler(m, dt, det); break;
+      case 'siren': this.aiSiren(m, dt, det); break;
     }
   }
 
@@ -387,7 +408,6 @@ export class MonsterSystem {
       }
       case 'chase': {
         if (!m.target) { this.setState(m, 'search'); m.searchT = 6; break; }
-        const dNow = this.detect(m, players_alive(m, det));
         // keep chasing while we can still sense the target
         if (det && (det.seen || det.heard || det.nd < 10)) {
           m.lastSeen = [det.player.x, det.player.z];
@@ -476,6 +496,70 @@ export class MonsterSystem {
     } else if (m.stateT > 8) this.setState(m, 'gone');
   }
 
+  // ---- THE RUNNER: sits still, keening quietly; the instant it is seen at
+  // close range it screams and sprints. Very fast, very lethal, gives up fast.
+  aiRunner(m, dt, det) {
+    if (m.state === 'chase' || m.state === 'attack') {
+      if (det) {
+        m.lastSeen = [det.player.x, det.player.z];
+        this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
+        if (this.attackCheck(m, det)) return;
+        // outruns stamina but not walls: if it loses you, it stops existing
+        if (det.nd > m.def.chaseGiveUp || m.stateT > 18) this.setState(m, 'gone');
+      } else if (m.stateT > 5) this.setState(m, 'gone');
+      return;
+    }
+    // dormant sprinter: frozen mid-crouch, waiting for the wrong moment
+    this.setState(m, 'dormant');
+    m.moving = false;
+    if (det && (det.seen && det.nd < m.def.aggroRange || det.nd < 6)) {
+      this.setState(m, 'chase');
+      this.audio.monsterVoice('runner', m.x, 1.5, m.z, 1); // the warning scream
+    }
+  }
+
+  // ---- THE CRAWLER: skitters through narrow spaces; short lethal lunge when
+  // a lit, close target presents itself. Avoids open bright rooms.
+  aiCrawler(m, dt, det) {
+    if (m.state === 'chase' || m.state === 'attack') {
+      if (det) {
+        m.lastSeen = [det.player.x, det.player.z];
+        this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
+        if (this.attackCheck(m, det)) return;
+        if (det.nd > m.def.chaseGiveUp || m.stateT > 9) this.setState(m, 'patrol');
+      } else if (m.stateT > 4) this.setState(m, 'patrol');
+      return;
+    }
+    this.setState(m, 'patrol');
+    this.wander(m, dt, 1.4);
+    if (det && det.nd < m.def.aggroRange) {
+      const light = this.getLightAt(det.player.x, det.player.z);
+      // bold in the dark, shy in the light
+      if (light < 0.55 || det.nd < 3) {
+        this.setState(m, 'chase');
+        this.audio.monsterVoice('crawler', m.x, 0.5, m.z, 1);
+      }
+    }
+  }
+
+  // ---- THE SIREN: stands far away and sings. Never attacks. If you close
+  // the distance it is simply gone — and the song stops.
+  aiSiren(m, dt, det) {
+    if (!det) { this.setState(m, 'idle'); m.moving = false; return; }
+    const p = det.player, nd = det.nd;
+    m.yaw = Math.atan2(p.x - m.x, p.z - m.z); // always facing you, singing
+    this.setState(m, 'watch');
+    if (nd < 7) {
+      this.setState(m, 'gone'); // approached: never was there
+      return;
+    }
+    if (nd > m.def.keepDist[1] * 2) { this.setState(m, 'gone'); return; }
+    // drift slowly to hold the haunting distance
+    if (nd < m.def.keepDist[0]) this.moveToward(m, m.x + (m.x - p.x), m.z + (m.z - p.z), m.def.speed, dt);
+    else if (nd > m.def.keepDist[1]) this.moveToward(m, p.x, p.z, m.def.speed, dt);
+    else m.moving = false;
+  }
+
   // ---- private hallucination: fades when directly observed
   updatePrivate(m, dt, player) {
     const dx = m.x - player.pos.x, dz = m.z - player.pos.z;
@@ -503,7 +587,10 @@ export class MonsterSystem {
     const t = m.animT;
     const amp = m.moving ? 0.55 : 0.05;
     for (const limb of (u.limbs || [])) {
-      if (limb.kind === 'leg') limb.g.rotation.x = Math.sin(t * 2 + (limb.side > 0 ? 0 : Math.PI)) * amp;
+      if (limb.kind === 'seg') {
+        // crawler: travelling wave along the body
+        limb.g.rotation.y = Math.sin(t * 3 + limb.side * 1.2) * (m.moving ? 0.28 : 0.05);
+      } else if (limb.kind === 'leg') limb.g.rotation.x = Math.sin(t * 2 + (limb.side > 0 ? 0 : Math.PI)) * amp;
       else limb.g.rotation.x = Math.sin(t * 2 + (limb.side > 0 ? Math.PI : 0)) * amp * 0.7;
     }
     // idle wrongness: slow head tilt, subtle body sway
@@ -511,6 +598,7 @@ export class MonsterSystem {
       u.head.rotation.z = Math.sin(t * 0.35 + m.id) * 0.14 + (m.type === 'watcher' ? 0.18 : 0);
       u.head.rotation.x = Math.sin(t * 0.23) * 0.08;
     }
+    if (u.torso && m.type === 'siren') u.torso.rotation.z = 0.35 + Math.sin(t * 0.5) * 0.06; // the song
     if (m.type === 'watcher') m.mesh.rotation.z = Math.sin(t * 0.4 + m.id) * 0.025;
     if (m.state === 'attack' && u.jaw) u.jaw.rotation.x = 0.9;
   }
@@ -560,9 +648,6 @@ export class MonsterSystem {
     }
   }
 }
-
-// helper used in hunter chase (kept tiny to avoid closures over stale det)
-function players_alive(m, det) { return det ? [det.player] : []; }
 
 const STATE_CODES = {
   idle: 0, watch: 1, stalk: 2, chase: 3, dormant: 4, reveal: 5, gone: 6,

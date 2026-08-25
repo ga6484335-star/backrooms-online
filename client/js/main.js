@@ -49,6 +49,7 @@ let flash = null;
 let dead = false;           // local player death state
 let respawnT = 0;           // seconds until respawn allowed
 let spectateIdx = 0;
+let distTravelled = 0;      // metres walked this session (horror director)
 
 const E = (id) => document.getElementById(id);
 
@@ -100,8 +101,8 @@ const menu = new MenuUI({
   start(level) { net.startGame(level); },
   leave() { leaveToMenu(); },
   applySettings,
-  resume() { E('pause-overlay').classList.add('hidden'); if (!player.mobile) canvas.requestPointerLock?.().catch?.(() => {}); },
-  quit() { leaveToMenu(); },
+  resume() { togglePause(false); E('settings-panel').classList.add('hidden'); },
+  quit() { togglePause(false); leaveToMenu(); },
 });
 
 async function connectThen(fn) {
@@ -176,6 +177,7 @@ net.on('ev', (m) => {
       break;
     }
     case 'died': {
+      if (monsters) monsters.notifyDeath();
       if (m.data.pid !== net.id) {
         flashText(`${net.players.get(m.data.pid)?.name || 'SOMEONE'} — SIGNAL LOST`);
       }
@@ -214,7 +216,7 @@ function startGame(seed, level) {
   events.onMessage = flashText;
 
   // flashlight
-  if (flash) { scene.remove(flash.spot); scene.remove(flash.fill); }
+  if (flash) flash.dispose(scene);
   flash = new Flashlight(camera, scene, audio, settings.quality);
   dead = false;
   respawnT = 0;
@@ -280,7 +282,10 @@ function localDeath() {
   dead = true;
   player.dead = true;
   player.enabled = false;
+  player.resetState();
+  togglePause(false); // ensure pause never swallows the death screen
   if (flash && flash.on) flash.setOn(false);
+  if (monsters) monsters.notifyDeath(); // director: quiet mourning period
   net.sendEvent('died', { pid: net.id });
   // found-footage death: glitch hard, blackout, spectator / respawn
   engine.bumpGlitch(3.5);
@@ -305,7 +310,8 @@ function respawn() {
   player.dead = false;
   const [sx, sz] = world.spawnPoint(0);
   player.teleport(sx, sz);
-  player.enabled = true;
+  player.resetState();
+  player.enabled = !paused;
   player.trauma(0.4);
   if (flash) flash.battery = Math.max(flash.battery, 30); // mercy charge
   net.sendEvent('respawn', { pid: net.id });
@@ -330,6 +336,7 @@ function levelTransition(level) {
   E('cc-level').textContent = levelDef.name.split('—')[0].trim();
   flashText(levelDef.name);
   engine.bumpGlitch(2);
+  player.resetState(); // new level = fresh, safe posture
 }
 
 // ---------------------------------------------------------------------------
@@ -385,17 +392,40 @@ function closeNote() {
 }
 
 function doEmote(e) {
+  if (dead) return;
   player.triggerEmote(e);
-  net.sendEmote(e);
+  // network: reflect the ACTUAL resulting state (sit toggles on/off)
+  net.sendEmote(player.emote || (player.sitting ? 'sit' : ''));
 }
 
-function togglePause() {
-  const el = E('pause-overlay');
-  const showing = !el.classList.contains('hidden');
-  el.classList.toggle('hidden', showing);
-  if (!showing) document.exitPointerLock();
-  else if (!player.mobile) canvas.requestPointerLock?.().catch?.(() => {});
+let paused = false;
+function togglePause(force) {
+  // state-of-truth is `paused`, not the DOM class — the pause overlay can be
+  // hidden by other flows (settings, leave-confirm) while the game stays paused
+  const wantShow = force !== undefined ? force : !paused;
+  if (wantShow === paused) return;
+  if (wantShow && dead) return; // death screen owns the screen
+  paused = wantShow;
+  E('pause-overlay').classList.toggle('hidden', !wantShow);
+  // freeze local input while paused; world/net/monsters keep running
+  player.enabled = !wantShow && !dead;
+  if (mobile) mobile.enabled = !wantShow;
+  if (wantShow) {
+    player.keys.clear();
+    document.exitPointerLock();
+  } else if (!player.mobile) {
+    canvas.requestPointerLock?.().catch?.(() => {});
+  }
 }
+
+let lastHudMenuToggle = 0;
+E('btn-hud-menu').addEventListener('click', () => {
+  // hybrid/touch devices can fire click twice (tap + synthesized mouse click)
+  const now = performance.now();
+  if (now - lastHudMenuToggle < 350) return;
+  lastHudMenuToggle = now;
+  if (gameState === 'playing') togglePause();
+});
 
 E('emote-bar').addEventListener('click', (ev) => {
   const b = ev.target.closest('button');
@@ -404,9 +434,14 @@ E('emote-bar').addEventListener('click', (ev) => {
 
 window.addEventListener('keydown', (e) => {
   if (gameState !== 'playing') return;
+  if (paused) {
+    if (e.code === 'Escape') togglePause(false);
+    return;
+  }
   if (e.code === 'KeyE') doInteract();
   if (e.code === 'Escape') togglePause();
   if (e.code === 'KeyQ') doEmote('wave');
+  if (e.code === 'KeyC') doEmote('sit'); // sit/stand toggle
   if (e.code === 'KeyF' && !dead && flash) flash.toggle();
   if (e.code === 'KeyR' && dead && respawnT <= 0) respawn();
 });
@@ -528,7 +563,16 @@ function loop() {
   if (gameState !== 'playing' || !world) return;
 
   if (!dead) {
+    // horror director telemetry: distance travelled, time, party size
+    const px0 = player.pos.x, pz0 = player.pos.z;
     player.update(dt, world, worldMgr);
+    distTravelled += Math.hypot(player.pos.x - px0, player.pos.z - pz0);
+    if (monsters) {
+      monsters.director.distance = distTravelled;
+      monsters.director.timePlayed = (now - startTime) / 1000;
+      monsters.director.players = net.players.size;
+    }
+    if (events) events.director.distance = distTravelled;
   } else {
     // dead: spectate nearest living teammate, or float at death spot
     spectateCamera(dt);
@@ -614,11 +658,19 @@ function leaveToMenu() {
   gameState = 'menu';
   net.leave();
   player.enabled = false;
+  player.dead = false;
+  dead = false;
+  paused = false;
+  player.resetState();
   if (mobile) mobile.hide();
   document.exitPointerLock && document.exitPointerLock();
   E('game-ui').classList.add('hidden');
   E('pause-overlay').classList.add('hidden');
+  E('leave-confirm').classList.add('hidden');
+  E('death-overlay').classList.add('hidden');
+  E('settings-panel').classList.add('hidden');
   E('note-overlay').classList.add('hidden');
+  noteOverlayOpen = false;
   audio.stopAmbience();
   if (worldMgr) {
     for (const key of [...worldMgr.chunks.keys()]) worldMgr.unload(key);
@@ -636,6 +688,18 @@ function leaveToMenu() {
 
 loadSettings();
 loop();
+
+// debug/testing hooks (harmless in production; used by the test suite)
+window.__dbg = {
+  chunks: () => (worldMgr ? worldMgr.chunks.size : 0),
+  pos: () => [player.pos.x, player.pos.y, player.pos.z],
+  player,
+  state: () => ({ gameState, dead, paused, sitting: player.sitting, grounded: player.grounded, yOff: player.yOff }),
+  flash: () => (flash ? { on: flash.on, battery: flash.battery } : null),
+  monsters: () => (monsters ? monsters.monsters.size : 0),
+  remoteAnims: () => (remotePlayers ? [...remotePlayers.players.values()].map((p) => p.anim) : []),
+  remoteY: () => (remotePlayers ? [...remotePlayers.players.values()].map((p) => p.cur.y) : []),
+};
 // boot message fades only after at least one frame has run, so we know
 // the module graph actually executed (not a bare module-load failure).
 requestAnimationFrame(() => E('boot-msg').classList.add('gone'));

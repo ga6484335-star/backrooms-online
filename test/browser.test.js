@@ -155,6 +155,87 @@ async function main() {
     await sleep(300);
     const pauseVisible = await cdp.eval(`!document.getElementById('pause-overlay').classList.contains('hidden')`);
     check(pauseVisible === true, 'pause overlay opens on Esc');
+    const hasSettings = await cdp.eval(`!!document.getElementById('btn-pause-settings')`);
+    const hasLeave = await cdp.eval(`document.getElementById('btn-quit').textContent.includes('LEAVE')`);
+    check(hasSettings === true, 'pause menu has SETTINGS');
+    check(hasLeave === true, 'pause menu has LEAVE SERVER');
+
+    // 10b. hamburger button visible in game
+    const burger = await cdp.eval(`!!document.getElementById('btn-hud-menu')`);
+    check(burger === true, 'hamburger menu button exists in HUD');
+
+    // 10c. leave confirm dialog: CANCEL returns to pause
+    await cdp.eval(`document.getElementById('btn-quit').click()`);
+    await sleep(200);
+    const confirmShown = await cdp.eval(`!document.getElementById('leave-confirm').classList.contains('hidden')`);
+    check(confirmShown === true, 'leave confirmation dialog shown');
+    await cdp.eval(`document.getElementById('btn-leave-cancel').click()`);
+    await sleep(200);
+    const backToPause = await cdp.eval(`!document.getElementById('pause-overlay').classList.contains('hidden') && document.getElementById('leave-confirm').classList.contains('hidden')`);
+    check(backToPause === true, 'CANCEL returns to pause menu');
+
+    // 10d. in-game settings opens and BACK returns to game without disconnect
+    await cdp.eval(`document.getElementById('btn-pause-settings').click()`);
+    await sleep(200);
+    const settingsShown = await cdp.eval(`!document.getElementById('settings-panel').classList.contains('hidden')`);
+    check(settingsShown === true, 'settings opens from pause');
+    await cdp.eval(`document.getElementById('btn-settings-back').click()`);
+    await sleep(300);
+    const backInGame = await cdp.eval(`window.__dbg.state()`);
+    check(backInGame && backInGame.gameState === 'playing', 'still in game after settings (no disconnect)');
+    const pauseClosed = await cdp.eval(`document.getElementById('pause-overlay').classList.contains('hidden')`);
+    check(pauseClosed === true, 'pause closed after settings BACK');
+
+    // 11. SIT / STAND state machine: sit → stand → move; never stuck
+    await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyC'}))`);
+    await sleep(300);
+    const sitting = await cdp.eval(`window.__dbg.state().sitting`);
+    check(sitting === true, 'sit engages');
+    await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyC'}))`);
+    await sleep(300);
+    const standing = await cdp.eval(`window.__dbg.state().sitting === false`);
+    check(standing === true, 'sit toggles back to standing');
+    // sit again then auto-stand by walking
+    await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyC'}))`);
+    await sleep(200);
+    await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyW'}))`);
+    await sleep(400);
+    await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keyup', {code:'KeyW'}))`);
+    const autoStand = await cdp.eval(`window.__dbg.state().sitting === false`);
+    check(autoStand === true, 'walking auto-stands from sit');
+
+    // 12. JUMP: grounded → airborne → lands; Space mid-air must NOT double height
+    const jumpTest = await cdp.eval(`(async () => {
+      const s0 = window.__dbg.state();
+      if (!s0.grounded) return { ok: false, why: 'not grounded at start' };
+      window.dispatchEvent(new KeyboardEvent('keydown', {code:'Space'}));
+      let maxY = 0, airborne = false;
+      for (let i = 0; i < 12; i++) {
+        await new Promise(r => setTimeout(r, 70));
+        const s = window.__dbg.state();
+        if (!s.grounded) airborne = true;
+        if (s.yOff > maxY) maxY = s.yOff;
+        if (i === 2) window.dispatchEvent(new KeyboardEvent('keydown', {code:'Space'})); // mid-air: must be ignored
+      }
+      await new Promise(r => setTimeout(r, 700));
+      const end = window.__dbg.state();
+      const landed = end.grounded && end.yOff === 0;
+      // v=3.6, g=13.5 → apex ≈ 0.48m; a double jump would exceed 0.9m
+      return { ok: airborne && landed && maxY > 0.1 && maxY < 0.7, airborne, landed, maxY: +maxY.toFixed(3) };
+    })()`);
+    check(jumpTest && jumpTest.ok === true, 'jump works: airborne, lands, no double-jump ' + JSON.stringify(jumpTest));
+
+    // 13. flashlight toggle via F
+    const flashTest = await cdp.eval(`(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyF'}));
+      await new Promise(r => setTimeout(r, 150));
+      const on = window.__dbg.flash();
+      window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyF'}));
+      await new Promise(r => setTimeout(r, 150));
+      const off = window.__dbg.flash();
+      return { on: on && on.on, off: off && !off.on };
+    })()`);
+    check(flashTest && flashTest.on === true && flashTest.off === true, 'flashlight toggles on/off with F');
 
     // console errors? (filter out expected WebGL-unavailable noise when headless
     // has no GL — the app surviving is the actual assertion)
@@ -185,16 +266,17 @@ async function main() {
     server.kill();
   }
 
-  if (failures.length) {
-    console.log('\n' + failures.length + ' FAILURES');
+  if (failures.length || checkFailed) {
+    console.log('\n' + (failures.length + (checkFailed ? 1 : 0)) + ' FAILURES');
     process.exit(1);
   }
   console.log('\nBROWSER TEST PASSED ✔');
 }
 
+let checkFailed = false;
 function check(cond, label) {
   if (cond) console.log('  ✔ ' + label);
-  else { console.log('  ✘ FAILED: ' + label); process.exitCode = 1; }
+  else { console.log('  ✘ FAILED: ' + label); checkFailed = true; process.exitCode = 1; }
 }
 
 main();

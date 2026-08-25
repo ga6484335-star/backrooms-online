@@ -10,8 +10,16 @@ const PORT = parseInt(process.env.PORT || '12000', 10);
 const ROOT = path.join(__dirname, '..');
 
 const app = express();
-app.use(express.static(path.join(ROOT, 'client'), { maxAge: '1h' }));
-app.use('/vendor/three', express.static(path.join(ROOT, 'node_modules', 'three'), { maxAge: '1d' }));
+// HTML/JS/CSS must always revalidate (ETag → cheap 304s) so deploys reach
+// existing sessions immediately; only the immutable three.js vendor bundle
+// gets a long cache lifetime.
+app.use(express.static(path.join(ROOT, 'client'), {
+  setHeaders(res, filePath) {
+    if (/\.(js|css|html)$/.test(filePath)) res.setHeader('Cache-Control', 'no-cache');
+    else res.setHeader('Cache-Control', 'public, max-age=3600');
+  },
+}));
+app.use('/vendor/three', express.static(path.join(ROOT, 'node_modules', 'three'), { maxAge: '1d', immutable: true }));
 app.get('/health', (req, res) => res.json({ ok: true, rooms: roomManager.rooms.size }));
 
 const server = http.createServer(app);

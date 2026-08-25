@@ -3,6 +3,7 @@ export class MenuUI {
   constructor(cb) {
     this.cb = cb; // {create(name), join(code,name), start(level), leave(), applySettings(s), resume(), quit()}
     this.el = (id) => document.getElementById(id);
+    this.settingsFromGame = false; // settings opened from pause → back returns to game
 
     this._bindButtons();
     this._startStatic();
@@ -18,8 +19,18 @@ export class MenuUI {
       this.cb.join(code, this._name());
     };
     E('btn-join-back').onclick = () => this._show('menu');
-    E('btn-settings').onclick = () => this._show('settings-panel');
-    E('btn-settings-back').onclick = () => { this._applySettings(); this._show('menu'); };
+    E('btn-settings').onclick = () => { this.settingsFromGame = false; E('settings-hint').classList.add('hidden'); this._show('settings-panel'); };
+    E('btn-settings-back').onclick = () => {
+      this._applySettings();
+      if (this.settingsFromGame) {
+        this.settingsFromGame = false;
+        E('settings-panel').classList.add('hidden');
+        E('settings-hint').classList.add('hidden');
+        this.cb.resume(); // back returns straight into gameplay
+      } else {
+        this._show('menu');
+      }
+    };
     E('btn-start').onclick = () => {
       const lv = parseInt(E('lobby-level').value, 10);
       this.cb.start(lv < 0 ? (Math.random() * 6) | 0 : lv);
@@ -29,8 +40,27 @@ export class MenuUI {
       if (document.fullscreenElement) document.exitFullscreen();
       else document.documentElement.requestFullscreen().catch(() => {});
     };
+    // in-game pause menu
     E('btn-resume').onclick = () => this.cb.resume();
-    E('btn-quit').onclick = () => this.cb.quit();
+    E('btn-pause-settings').onclick = () => {
+      this.settingsFromGame = true;
+      E('settings-hint').classList.remove('hidden');
+      E('pause-overlay').classList.add('hidden');
+      E('settings-panel').classList.remove('hidden');
+    };
+    E('btn-quit').onclick = () => {
+      // confirm before leaving the server
+      E('pause-overlay').classList.add('hidden');
+      E('leave-confirm').classList.remove('hidden');
+    };
+    E('btn-leave-cancel').onclick = () => {
+      E('leave-confirm').classList.add('hidden');
+      E('pause-overlay').classList.remove('hidden');
+    };
+    E('btn-leave-go').onclick = () => {
+      E('leave-confirm').classList.add('hidden');
+      this.cb.quit();
+    };
     E('join-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') E('btn-join-go').click(); });
     E('name-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') E('btn-create').click(); });
 

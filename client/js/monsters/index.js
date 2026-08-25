@@ -15,6 +15,7 @@ export class HorrorEvents {
     this.isHostFn = () => false;
     this.onMessage = null;
     this.lightMgr = null;
+    this.director = { distance: 0 }; // fed from the main loop
   }
 
   setHostFn(fn) { this.isHostFn = fn; }
@@ -25,22 +26,29 @@ export class HorrorEvents {
     this.timer -= dt;
     this.personalTimer -= dt;
 
+    // director: deeper exploration quickens the world's pulse
+    const dist = this.director ? this.director.distance : 0;
+    const depth = dist < 120 ? 0 : dist < 400 ? 0.15 : Math.min(0.35, (dist - 400) / 1500);
+
     if (this.timer <= 0) {
-      this.timer = 40 + Math.random() * 60;
+      this.timer = (40 + Math.random() * 60) * (1 - depth * 0.5);
       if (this.isHostFn()) {
-        const kinds = ['distantmetal', 'lightflicker', 'creak', 'breath', 'scream', 'footsteps', 'lightdie'];
+        const kinds = ['distantmetal', 'lightflicker', 'creak', 'breath', 'scream', 'footsteps', 'lightdie',
+          'doorslam', 'objectfall', 'waterdrip', 'lighton'];
         const kind = kinds[(Math.random() * kinds.length) | 0];
         this.network.sendEvent(kind, { x: player.pos.x, z: player.pos.z });
         this.fire(kind, player);
       }
     }
     if (this.personalTimer <= 0) {
-      this.personalTimer = 60 + Math.random() * 80;
+      this.personalTimer = (60 + Math.random() * 80) * (1 - depth * 0.4);
       const roll = Math.random();
-      if (roll < 0.35) this.fire('behindyou', player);
-      else if (roll < 0.55) this.fire('glitch', player);
-      else if (roll < 0.75) this.fire('whisper', player);
-      else if (roll < 0.85) this.fire('footsteps', player);
+      if (roll < 0.3) this.fire('behindyou', player);
+      else if (roll < 0.45) this.fire('glitch', player);
+      else if (roll < 0.62) this.fire('whisper', player);
+      else if (roll < 0.74) this.fire('footsteps', player);
+      else if (roll < 0.84) this.fire('waterdrip', player);
+      else if (roll < 0.9) this.fire('heartbeat', player);
       // else: nothing. silence is part of the horror.
     }
   }
@@ -94,6 +102,40 @@ export class HorrorEvents {
       case 'dooropen': {
         a.doorCreak(player.pos.x + 3, player.pos.z);
         this.renderer.bumpGlitch(0.4);
+        break;
+      }
+      case 'doorslam': {
+        // a heavy door closing somewhere — directional, close enough to worry
+        const ang = Math.random() * Math.PI * 2;
+        const d = 8 + Math.random() * 14;
+        a.doorSlam(player.pos.x + Math.cos(ang) * d, player.pos.z + Math.sin(ang) * d);
+        if (this.onMessage && Math.random() < 0.4) this.onMessage('A DOOR SLAMMED SOMEWHERE.');
+        break;
+      }
+      case 'objectfall': {
+        // something fell off something, off in the maze
+        const ang = Math.random() * Math.PI * 2;
+        const d = 10 + Math.random() * 18;
+        a.metalClatter(player.pos.x + Math.cos(ang) * d, player.pos.z + Math.sin(ang) * d);
+        break;
+      }
+      case 'waterdrip': {
+        // a sudden cluster of drips, close by
+        const ang = Math.random() * Math.PI * 2;
+        const d = 3 + Math.random() * 6;
+        for (let i = 0; i < 4 + ((Math.random() * 3) | 0); i++) {
+          setTimeout(() => a.drip(player.pos.x + Math.cos(ang) * d, player.pos.z + Math.sin(ang) * d), i * (300 + Math.random() * 500));
+        }
+        break;
+      }
+      case 'lighton': {
+        // a dead fixture buzzes back to life — which is somehow worse
+        if (this.lightMgr) {
+          const revived = this.lightMgr.reviveNearest
+            ? this.lightMgr.reviveNearest(player.pos.x, player.pos.z, 16)
+            : false;
+          if (revived) a.buzz(player.pos.x, player.pos.z, 1.0);
+        }
         break;
       }
       case 'heartbeat': a.heartbeat(1); break;

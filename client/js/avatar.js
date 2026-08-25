@@ -88,6 +88,13 @@ export function animateAvatar(av, dt, anim, emote) {
     armL = -Math.sin(t) * 0.55;
     armR = Math.sin(t) * 0.55;
     bodyY = Math.abs(Math.cos(t)) * 0.03;
+  } else if (anim === 'sit') {
+    sit = true;
+    legL = -1.5; legR = -1.5;
+  } else if (anim === 'jump') {
+    legL = -0.9; legR = -0.6;
+    armL = -0.5; armR = -0.5;
+    bodyY = 0.04;
   } else {
     armL = Math.sin(t * 0.8) * 0.04;
     armR = -Math.sin(t * 0.8) * 0.04;
@@ -190,7 +197,9 @@ export class RemotePlayers {
       p.cur.yaw += dy * k;
       p.cur.pitch += (p.tgt.pitch - p.cur.pitch) * k;
 
-      p.av.group.position.set(p.cur.x, 0, p.cur.z);
+      // vertical offset: cur.y is the eye height (includes jump); base eye = 1.62
+      const yOff = Math.max(-0.7, (p.cur.y || 1.62) - 1.62);
+      p.av.group.position.set(p.cur.x, yOff, p.cur.z);
       p.av.group.rotation.y = p.cur.yaw + Math.PI;
       p.av.parts.head.rotation.x = -p.cur.pitch * 0.7;
       animateAvatar(p.av, dt, p.anim, p.emote);

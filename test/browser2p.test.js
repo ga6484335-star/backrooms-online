@@ -5,6 +5,7 @@
 const { spawn } = require('child_process');
 const http = require('http');
 const path = require('path');
+const fs = require('fs');
 const WebSocket = require('ws');
 
 const PORT = 13091;
@@ -68,6 +69,8 @@ async function main() {
   server.stderr.on('data', (d) => process.stderr.write('SRVERR ' + d));
   await sleep(1200);
 
+  // fresh profiles: stale JS module cache in old profiles breaks tests
+  try { fs.rmSync('/tmp/c2p1', { recursive: true, force: true }); fs.rmSync('/tmp/c2p2', { recursive: true, force: true }); } catch {}
   const c1 = spawn(CHROME, ['--headless=new', '--no-sandbox', '--disable-gpu', '--user-data-dir=/tmp/c2p1',
     `--remote-debugging-port=${CDP1}`, 'about:blank'], { stdio: 'pipe' });
   const c2 = spawn(CHROME, ['--headless=new', '--no-sandbox', '--disable-gpu', '--user-data-dir=/tmp/c2p2',
@@ -118,6 +121,24 @@ async function main() {
     await sleep(800);
     const emoteSeen = await p2.eval(`window.__lastRemoteEmote || 'none'`);
     console.log('  [info] emote seen by client 2:', emoteSeen);
+
+    // --- client 1 sits; client 2 must see the sit animation via state sync
+    await p1.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyC'}))`);
+    await sleep(1200);
+    const sitSeen = await p2.eval(`(window.__dbg && window.__dbg.remoteAnims) ? window.__dbg.remoteAnims() : ['no-dbg']`);
+    console.log('  [info] remote anims seen by client 2:', JSON.stringify(sitSeen));
+    check(Array.isArray(sitSeen) && sitSeen.includes('sit'), 'sit posture synced to peer');
+    await p1.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyC'}))`);
+    await sleep(1200);
+    const standSeen = await p2.eval(`(window.__dbg && window.__dbg.remoteAnims) ? window.__dbg.remoteAnims() : ['no-dbg']`);
+    check(Array.isArray(standSeen) && !standSeen.includes('sit'), 'stand synced back to peer');
+
+    // --- client 1 jumps; client 2 must see vertical offset
+    await p1.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'Space'}))`);
+    await sleep(400);
+    const jumpSeen = await p2.eval(`(window.__dbg && window.__dbg.remoteY) ? window.__dbg.remoteY() : []`);
+    console.log('  [info] remote y offsets seen by client 2:', JSON.stringify(jumpSeen));
+    check(Array.isArray(jumpSeen) && jumpSeen.some((y) => y > 1.7 && y < 2.2), 'jump height synced to peer');
 
     // --- disconnect client 2, verify client 1 updates
     c2.kill('SIGKILL');

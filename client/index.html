@@ -83,6 +83,7 @@
       <button id="set-fullscreen" class="mbtn small">TOGGLE</button>
     </div>
     <div class="panel-row"><button id="btn-settings-back" class="mbtn ghost">BACK</button></div>
+    <div id="settings-hint" class="lobby-hint hidden">APPLIES INSTANTLY — BACK RETURNS TO THE GAME</div>
   </div>
 </div>
 
@@ -116,6 +117,7 @@
 
 <!-- ======================= GAME HUD ======================= -->
 <div id="game-ui" class="hidden">
+  <button id="btn-hud-menu" title="MENU">&#8801;</button>
   <div class="camcorder">
     <div class="cc-top">
       <span id="rec-dot">&#9679;</span> <span class="cc-label">REC</span>
@@ -149,6 +151,8 @@
   <div class="mbtns">
     <button id="mb-run">RUN</button>
     <button id="mb-flash">FLASH</button>
+    <button id="mb-jump">JUMP</button>
+    <button id="mb-sit">SIT</button>
     <button id="mb-interact">INTERACT</button>
     <button id="mb-emote">EMOTE</button>
     <button id="mb-dance">DANCE</button>
@@ -173,7 +177,20 @@
   <div class="panel">
     <h2>PAUSED</h2>
     <div class="panel-row"><button id="btn-resume" class="mbtn">RESUME</button></div>
-    <div class="panel-row"><button id="btn-quit" class="mbtn ghost">LEAVE ROOM</button></div>
+    <div class="panel-row"><button id="btn-pause-settings" class="mbtn">SETTINGS</button></div>
+    <div class="panel-row"><button id="btn-quit" class="mbtn ghost">LEAVE SERVER</button></div>
+  </div>
+</div>
+
+<!-- ======================= LEAVE CONFIRM ======================= -->
+<div id="leave-confirm" class="hidden">
+  <div class="panel">
+    <h2>LEAVE SERVER?</h2>
+    <div class="panel-sub">Are you sure you want to leave this server?</div>
+    <div class="panel-row">
+      <button id="btn-leave-cancel" class="mbtn ghost">CANCEL</button>
+      <button id="btn-leave-go" class="mbtn">LEAVE</button>
+    </div>
   </div>
 </div>
 

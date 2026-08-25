@@ -40,6 +40,28 @@ export const MONSTER_TYPES = {
     despawnDist: 55, voice: 'shadow', rarity: 0.35, privateOnly: true,
     keepDist: [12, 26], vision: 0, hearing: 0, attackRange: 0, lethal: false,
   },
+  runner: {
+    // extremely rare burst-chaser: long warning scream, then a straight sprint
+    name: 'THE RUNNER', speed: 7.2, aggroRange: 30, despawnLookAt: 0,
+    despawnDist: 130, voice: 'runner', rarity: 0.05, privateOnly: false,
+    keepDist: [0, 0], vision: 38, hearing: 26,
+    attackRange: 1.1, lethal: true, chaseGiveUp: 34,
+  },
+  crawler: {
+    // low, fast skitterer for narrow/maintenance areas; short lethal lunge
+    name: 'THE CRAWLER', speed: 3.4, aggroRange: 14, despawnLookAt: 0,
+    despawnDist: 70, voice: 'crawler', rarity: 0.12, privateOnly: false,
+    keepDist: [0, 0], vision: 16, hearing: 18,
+    attackRange: 0.85, lethal: true, chaseGiveUp: 20, lowProfile: true,
+  },
+  siren: {
+    // psychological: stands far away emitting a lure-song; damages sanity,
+    // never kills — but walking toward it leads into the dark
+    name: 'THE SIREN', speed: 0.9, aggroRange: 0, despawnLookAt: 4,
+    despawnDist: 90, voice: 'siren', rarity: 0.07, privateOnly: false,
+    keepDist: [18, 30], vision: 0, hearing: 0, attackRange: 0, lethal: false,
+    lures: true,
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -55,6 +77,15 @@ function seg(g, w, h, d, mat) {
   // limb segment hanging DOWN from its group origin
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
   m.position.y = -h / 2;
+  const grp = new THREE.Group();
+  grp.add(m);
+  return grp;
+}
+
+// organic cylinder limb, tapered, hanging DOWN from its group origin
+function limb(r, len, mat) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.7, r, len, 6), mat);
+  m.position.y = -len / 2;
   const grp = new THREE.Group();
   grp.add(m);
   return grp;
@@ -247,6 +278,116 @@ export function buildMonster(type) {
       hd.position.y = 2.15;
       hd.rotation.z = 0.1;
       g.add(body, hd);
+      break;
+    }
+    case 'runner': {
+      // a sprinter built wrong: powerful hind legs, shrivelled arms folded
+      // against the chest, head thrown permanently back mid-scream
+      const hips = new THREE.Group(); hips.position.y = 1.05;
+      const pelvis = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6), darkFleshM());
+      pelvis.scale.set(1, 0.8, 1);
+      hips.add(pelvis);
+      for (const s of [-1, 1]) {
+        const thigh = limb(0.13, 0.62, darkFleshM());
+        thigh.position.set(s * 0.2, -0.1, 0);
+        const knee = new THREE.Group(); knee.position.y = -0.62; thigh.add(knee);
+        const shin = limb(0.1, 0.55, darkFleshM());
+        shin.rotation.x = 0.7; knee.add(shin);
+        hips.add(thigh);
+        u.limbs.push({ g: thigh, kind: 'leg', side: s });
+      }
+      const torso = new THREE.Group(); torso.position.y = 0.42; torso.rotation.x = 0.45;
+      const chest = new THREE.Mesh(new THREE.SphereGeometry(0.3, 9, 7), skinM());
+      chest.scale.set(1, 1.1, 0.75); torso.add(chest);
+      for (const s of [-1, 1]) {
+        const arm = limb(0.06, 0.34, skinM());
+        arm.position.set(s * 0.26, 0.12, 0.12);
+        arm.rotation.set(-1.4, 0, s * 0.5); // folded useless against chest
+        torso.add(arm);
+      }
+      const headG = new THREE.Group(); headG.position.set(0, 0.4, 0.1);
+      headG.rotation.x = -0.9; // head thrown back
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 9, 7), skinM());
+      headG.add(head);
+      const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.2, 0.12), darkFleshM());
+      jaw.position.set(0, -0.12, 0.1); jaw.rotation.x = 1.1; // mouth torn open
+      headG.add(jaw);
+      torso.add(headG);
+      hips.add(torso);
+      g.add(hips);
+      u.torso = torso;
+      break;
+    }
+    case 'crawler': {
+      // something that drags itself flat: long segmented torso, many small
+      // skittering legs, a face that is only teeth
+      const segs = 6;
+      let parent = g;
+      for (let i = 0; i < segs; i++) {
+        const seg = new THREE.Group();
+        seg.position.set(0, i === 0 ? 0.32 : 0, i === 0 ? 0 : 0.42);
+        const body = new THREE.Mesh(new THREE.SphereGeometry(0.24 - i * 0.015, 8, 6), darkFleshM());
+        body.scale.set(1, 0.55, 1.2);
+        seg.add(body);
+        for (const s of [-1, 1]) {
+          const leg = limb(0.035, 0.3, darkFleshM());
+          leg.position.set(s * 0.22, 0, 0);
+          leg.rotation.z = s * 0.9;
+          seg.add(leg);
+        }
+        u.limbs.push({ g: seg, kind: 'seg', side: i % 2 === 0 ? 1 : -1 });
+        parent.add(seg);
+        parent = seg;
+      }
+      const headG = new THREE.Group(); headG.position.set(0, 0.3, -0.35);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.19, 9, 7), darkFleshM());
+      head.scale.set(1, 0.8, 1);
+      headG.add(head);
+      const maw = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.22, 8), mouthM());
+      maw.rotation.x = -Math.PI / 2;
+      maw.position.set(0, 0, -0.16);
+      headG.add(maw);
+      g.add(headG);
+      break;
+    }
+    case 'siren': {
+      // a pale figure in ragged hanging strips, head tilted as if listening;
+      // the face is smooth — no mouth, yet it sings
+      const m = new THREE.MeshStandardMaterial({ color: 0xb9b2a4, roughness: 0.85 });
+      const skirtM = new THREE.MeshStandardMaterial({ color: 0x4a4238, roughness: 0.95, side: THREE.DoubleSide });
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.42, 1.6, 9), m);
+      body.position.y = 0.9;
+      g.add(body);
+      for (let i = 0; i < 10; i++) {
+        const strip = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 0.7 + ((i * 37) % 10) / 20), skirtM);
+        const a = (i / 10) * Math.PI * 2;
+        strip.position.set(Math.cos(a) * 0.3, 1.0, Math.sin(a) * 0.3);
+        strip.rotation.y = -a + Math.PI / 2;
+        strip.rotation.z = Math.sin(i * 3.7) * 0.3;
+        g.add(strip);
+      }
+      const headG = new THREE.Group(); headG.position.y = 1.85;
+      headG.rotation.z = 0.35; headG.rotation.x = -0.15; // tilted, listening
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 9, 7), m);
+      head.scale.set(0.9, 1.25, 0.9); // smooth, featureless, wrong
+      headG.add(head);
+      const hairM = new THREE.MeshStandardMaterial({ color: 0x1a1512, roughness: 1 });
+      for (let i = 0; i < 8; i++) {
+        const h = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.008, 0.8 + ((i * 53) % 10) / 25, 3), hairM);
+        const a = (i / 8) * Math.PI * 2;
+        h.position.set(Math.cos(a) * 0.12, -0.3, Math.sin(a) * 0.12);
+        h.rotation.z = Math.sin(i * 2.1) * 0.3;
+        headG.add(h);
+      }
+      g.add(headG);
+      for (const s of [-1, 1]) {
+        const arm = limb(0.07, 0.9, m);
+        arm.position.set(s * 0.22, 1.45, 0);
+        arm.rotation.z = s * 0.12; // hanging limp
+        g.add(arm);
+        u.limbs.push({ g: arm, kind: 'arm', side: s });
+      }
+      u.torso = headG;
       break;
     }
   }
