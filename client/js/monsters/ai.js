@@ -551,6 +551,47 @@ export class MonsterSystem {
     return false;
   }
 
+  // ---- generic lethal hunt cycle for aggressive species ----------------
+  // sense -> chase (BFS pathing) -> attack. When the prey vanishes, the
+  // monster heads to the last known position and SWEEPS nearby corridors
+  // instead of giving up. It only re-arms once the sweep finds nothing.
+  huntChase(m, dt, det, opts = {}) {
+    const searchTime = opts.searchTime ?? 7;
+    const rearm = opts.rearm ?? 'patrol';
+    if (det) {
+      m.lastSeen = [det.player.x, det.player.z];
+      m.searchT = searchTime;
+      if (m.state !== 'chase' && m.state !== 'attack') {
+        this.setState(m, 'chase');
+        this.audio.monsterVoice(m.type, m.x, 1.5, m.z, 1);
+      }
+      this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
+      this.attackCheck(m, det);
+      return;
+    }
+    if (m.lastSeen) {
+      // lost the target: go to last known spot, then sweep around it
+      m.searchT = (m.searchT ?? searchTime) - dt;
+      if (m.searchT > 0) {
+        this.setState(m, 'search');
+        if (!m.searchSpot || Math.hypot(m.searchSpot[0] - m.x, m.searchSpot[1] - m.z) < 1.2) {
+          const a = Math.random() * Math.PI * 2;
+          m.searchSpot = [
+            m.lastSeen[0] + Math.cos(a) * (2 + Math.random() * 5),
+            m.lastSeen[1] + Math.sin(a) * (2 + Math.random() * 5),
+          ];
+        }
+        this.moveToward(m, m.searchSpot[0], m.searchSpot[1], m.def.speed * 0.7, dt);
+        return;
+      }
+      m.lastSeen = null;
+      m.searchSpot = null;
+    }
+    if (rearm === 'dormant') { this.setState(m, 'dormant'); m.moving = false; }
+    else if (rearm === 'gone') this.setState(m, 'gone');
+    else { this.setState(m, 'patrol'); this.wander(m, dt, 0.9); }
+  }
+
   // ---- THE WATCHER: stands far away, watches, creeps closer when unseen,
   // vanishes if approached or stared at too long
   aiWatcher(m, dt, det) {
@@ -674,14 +715,8 @@ export class MonsterSystem {
 
   // ---- THE AMBUSHER: motionless in the dark; erupts when someone is close
   aiAmbusher(m, dt, det) {
-    if (m.state === 'attack' || m.state === 'chase') {
-      if (det) {
-        m.lastSeen = [det.player.x, det.player.z];
-        this.setState(m, 'chase');
-        this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
-        if (this.attackCheck(m, det)) return;
-        if (det.nd > m.def.chaseGiveUp || m.stateT > 10) this.setState(m, 'gone');
-      } else if (m.stateT > 6) this.setState(m, 'gone');
+    if (m.state === 'attack' || m.state === 'chase' || m.state === 'search') {
+      this.huntChase(m, dt, det, { rearm: 'dormant', searchTime: 5 });
       return;
     }
     // dormant in darkness
@@ -706,25 +741,15 @@ export class MonsterSystem {
       }
       return;
     }
-    if (det) {
-      this.setState(m, 'chase');
-      this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
-      if (this.attackCheck(m, det)) return;
-      if (det.nd > m.def.chaseGiveUp || m.stateT > 14) this.setState(m, 'gone');
-    } else if (m.stateT > 8) this.setState(m, 'gone');
+    this.huntChase(m, dt, det, { rearm: 'dormant', searchTime: 6 });
   }
 
   // ---- THE RUNNER: sits still, keening quietly; the instant it is seen at
   // close range it screams and sprints. Very fast, very lethal, gives up fast.
   aiRunner(m, dt, det) {
-    if (m.state === 'chase' || m.state === 'attack') {
-      if (det) {
-        m.lastSeen = [det.player.x, det.player.z];
-        this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
-        if (this.attackCheck(m, det)) return;
-        // outruns stamina but not walls: if it loses you, it stops existing
-        if (det.nd > m.def.chaseGiveUp || m.stateT > 18) this.setState(m, 'gone');
-      } else if (m.stateT > 5) this.setState(m, 'gone');
+    if (m.state === 'chase' || m.state === 'attack' || m.state === 'search') {
+      // outruns stamina but not walls: sweeps briefly, then refolds and waits
+      this.huntChase(m, dt, det, { rearm: 'dormant', searchTime: 8 });
       return;
     }
     // dormant sprinter: frozen mid-crouch, waiting for the wrong moment
@@ -739,13 +764,8 @@ export class MonsterSystem {
   // ---- THE CRAWLER: skitters through narrow spaces; short lethal lunge when
   // a lit, close target presents itself. Avoids open bright rooms.
   aiCrawler(m, dt, det) {
-    if (m.state === 'chase' || m.state === 'attack') {
-      if (det) {
-        m.lastSeen = [det.player.x, det.player.z];
-        this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
-        if (this.attackCheck(m, det)) return;
-        if (det.nd > m.def.chaseGiveUp || m.stateT > 9) this.setState(m, 'patrol');
-      } else if (m.stateT > 4) this.setState(m, 'patrol');
+    if (m.state === 'chase' || m.state === 'attack' || m.state === 'search') {
+      this.huntChase(m, dt, det, { rearm: 'patrol', searchTime: 6 });
       return;
     }
     this.setState(m, 'patrol');
@@ -890,13 +910,8 @@ export class MonsterSystem {
 
   // ---- THE WALL DWELLER: a stain on the wall until you brush past it
   aiWalldweller(m, dt, det) {
-    if (m.state === 'chase' || m.state === 'attack') {
-      if (det) {
-        m.lastSeen = [det.player.x, det.player.z];
-        this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
-        if (this.attackCheck(m, det)) return;
-        if (det.nd > m.def.chaseGiveUp || m.stateT > 9) this.setState(m, 'gone'); // melts back into the walls
-      } else if (m.stateT > 5) this.setState(m, 'gone');
+    if (m.state === 'chase' || m.state === 'attack' || m.state === 'search') {
+      this.huntChase(m, dt, det, { rearm: 'gone', searchTime: 5 }); // melts back into the walls
       return;
     }
     this.setState(m, 'dormant');
@@ -917,13 +932,8 @@ export class MonsterSystem {
       m.moving = false;
       return;
     }
-    if (m.state === 'chase' || m.state === 'attack') {
-      if (det) {
-        m.lastSeen = [det.player.x, det.player.z];
-        this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
-        if (this.attackCheck(m, det)) return;
-        if (det.nd > m.def.chaseGiveUp || m.stateT > 11) this.setState(m, 'dormant');
-      } else if (m.stateT > 4) this.setState(m, 'dormant');
+    if (m.state === 'chase' || m.state === 'attack' || m.state === 'search') {
+      this.huntChase(m, dt, det, { rearm: 'dormant', searchTime: 6 });
       return;
     }
     this.setState(m, 'dormant');
@@ -948,13 +958,9 @@ export class MonsterSystem {
       }
       return;
     }
-    if (m.state === 'chase' || m.state === 'attack') {
-      if (det) {
-        m.lastSeen = [det.player.x, det.player.z];
-        this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
-        if (this.attackCheck(m, det)) return;
-        if (det.nd > m.def.chaseGiveUp || m.stateT > 8) this.setState(m, 'gone');
-      } else if (m.stateT > 4) this.setState(m, 'gone');
+    if (m.state === 'chase' || m.state === 'attack' || m.state === 'search') {
+      // after a failed hunt it skitters away across the tiles, unseen
+      this.huntChase(m, dt, det, { rearm: 'gone', searchTime: 5 });
       return;
     }
     // hanging. ticking. waiting.
@@ -981,13 +987,12 @@ export class MonsterSystem {
 
   // ---- THE FALSE PLAYER: walks like your friend until it doesn't
   aiFalseplayer(m, dt, det) {
-    if (m.state === 'chase' || m.state === 'attack') {
-      if (det) {
-        m.lastSeen = [det.player.x, det.player.z];
-        this.moveToward(m, det.player.x, det.player.z, m.def.speed * 1.9, dt); // too fast, too many joints
-        if (this.attackCheck(m, det)) return;
-        if (det.nd > m.def.chaseGiveUp || m.stateT > 20) this.setState(m, 'gone');
-      } else if (m.stateT > 6) this.setState(m, 'gone');
+    if (m.state === 'chase' || m.state === 'attack' || m.state === 'search') {
+      // too fast, too many joints — and it goes back to "being a person" after
+      const spd = m.def.speed;
+      m.def.speed = spd * 1.9;
+      this.huntChase(m, dt, det, { rearm: 'patrol', searchTime: 12 });
+      m.def.speed = spd;
       return;
     }
     if (m.state === 'stare') {
