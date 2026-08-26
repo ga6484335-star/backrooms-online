@@ -124,11 +124,32 @@ export const MONSTER_TYPES = {
 // ---------------------------------------------------------------------------
 // shared materials — skin like wet pale leather, flesh darker, void-black fur
 const skinM = () => new THREE.MeshStandardMaterial({ color: 0xcfc3b2, roughness: 0.55, metalness: 0.05 });
-const skinSicklyM = () => new THREE.MeshStandardMaterial({ color: 0xa8a294, roughness: 0.7 });
-const darkFleshM = () => new THREE.MeshStandardMaterial({ color: 0x4a3f38, roughness: 0.85 });
-const voidM = () => new THREE.MeshStandardMaterial({ color: 0x07070a, roughness: 1 });
-const mouthM = () => new THREE.MeshStandardMaterial({ color: 0x0c0508, roughness: 0.4 });
-const eyeGlowM = () => new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xd8d2c2, emissiveIntensity: 0.55 });
+const skinSicklyM = () => creatureMat(new THREE.MeshStandardMaterial({ color: 0xa8a294, roughness: 0.7 }));
+const darkFleshM = () => creatureMat(new THREE.MeshStandardMaterial({ color: 0x4a3f38, roughness: 0.85 }));
+const voidM = () => creatureMat(new THREE.MeshStandardMaterial({ color: 0x07070a, roughness: 1 }));
+const mouthM = () => creatureMat(new THREE.MeshStandardMaterial({ color: 0x0c0508, roughness: 0.4 }));
+const eyeGlowM = () => new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xd8d2c2, emissiveIntensity: 0.55, fog: false });
+
+// Creatures live in heavy fog and near-darkness; pure MeshStandard bodies read
+// as nothing from a corridor away. A whisper of emissive keeps silhouettes
+// readable without ever making them glow cartoon-bright.
+function creatureMat(base) {
+  base.emissive = base.color.clone().multiplyScalar(0.085);
+  return base;
+}
+
+// stamp every mesh in a monster group so nothing is ever accidentally culled
+// or left invisible when it should exist
+export function finalizeMonsterMesh(g) {
+  g.traverse((o) => {
+    if (o.isMesh) {
+      o.frustumCulled = false;
+      o.castShadow = false; // perf: shadows off (they live in the dark anyway)
+      o.receiveShadow = false;
+    }
+  });
+  return g;
+}
 const wetBlackM = () => new THREE.MeshStandardMaterial({ color: 0x0d0f0c, roughness: 0.22, metalness: 0.1 });
 const boneM = () => new THREE.MeshStandardMaterial({ color: 0xd8d2c0, roughness: 0.5, metalness: 0.02 });
 const plasterM = () => new THREE.MeshStandardMaterial({ color: 0x8f8468, roughness: 0.92 });
@@ -813,5 +834,6 @@ export function buildMonster(type) {
     }
   }
   g.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.frustumCulled = true; } });
+  finalizeMonsterMesh(g);
   return g;
 }

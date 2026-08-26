@@ -223,6 +223,20 @@ body {
   background-image: repeating-linear-gradient(0deg, transparent, transparent 26px, rgba(0,0,0,.07) 27px);
 }
 .note-close { margin-top: 18px; font-size: 11px; color: #6b5f45; letter-spacing: 2px; }
+#note-close-btn {
+  margin-top: 18px; align-self: center; min-width: 150px; min-height: 48px;
+  font-family: inherit; font-size: 14px; letter-spacing: 3px; cursor: pointer;
+  color: #2a2118; background: #c9b98a; border: 1px solid #6b5f45;
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+}
+#note-close-btn:active { background: #a89a70; }
+#note-x {
+  position: absolute; top: 6px; right: 10px; width: 44px; height: 44px;
+  font-size: 28px; line-height: 1; cursor: pointer; color: #4a4132;
+  background: none; border: none; touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent; z-index: 2;
+}
+#note-x:active { color: #2a2118; }
 
 /* ---------------- fade / boot ---------------- */
 #fade { position: fixed; inset: 0; background: #000; z-index: 90; opacity: 1; pointer-events: none; transition: opacity 2.2s ease; }

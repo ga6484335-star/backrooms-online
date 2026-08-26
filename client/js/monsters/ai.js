@@ -58,6 +58,7 @@ export class MonsterSystem {
     this.encounterAgo = 0;    // seconds since the last spawn
 
     this.hallucTimer = 50 + Math.random() * 60;
+    this._visWarnings = new Set(); // warn-once per mesh class
   }
 
   bind(getPlayers) { this.getPlayers = getPlayers; }
@@ -100,8 +101,8 @@ export class MonsterSystem {
           // guaranteed encounters: past ~100m the director WILL bring the
           // first one; afterwards the chance creeps up the longer it's quiet
           let guaranteed = false;
-          if (this.encounters === 0 && dist > 100) { chanceOf = 1; guaranteed = true; }
-          else if (dist > 160 && this.encounterAgo > 60) chanceOf = Math.min(1, chanceOf + (this.encounterAgo - 60) / 90);
+          if (this.encounters === 0 && dist > 90) { chanceOf = 1; guaranteed = true; }
+          else if (dist > 120 && this.encounterAgo > 55) chanceOf = Math.min(1, chanceOf + (this.encounterAgo - 55) / 80);
           const globalCap = 3 + playerCount;
           // first-encounter guarantee must not be eaten by a lingering idle
           // silhouette: dormant mood species don't count against the cap there
@@ -193,11 +194,21 @@ export class MonsterSystem {
         }
       }
     }
+    let fallback = null;
     for (let tries = 0; tries < 8; tries++) {
       const cell = this.worldMgr.monstersSpawnCell(px, pz);
       const sx = (cell[0] + 0.5) * CELL, sz = (cell[1] + 0.5) * CELL;
-      if (!blocked(sx, sz)) return this.spawnMonster(type, sx, sz);
+      if (blocked(sx, sz)) continue;
+      if (!fallback) fallback = [sx, sz];
+      // prefer a spawn some watcher will actually run into: line of sight
+      // along an approach corridor, not behind ten closed loops
+      const seen = watchers.some((w) => {
+        const d = Math.hypot(sx - w.x, sz - w.z);
+        return d > 12 && d < 60 && this.hasLOS(w.x, w.z, sx, sz);
+      });
+      if (seen) return this.spawnMonster(type, sx, sz);
     }
+    if (fallback) return this.spawnMonster(type, fallback[0], fallback[1]);
     return null;
   }
 
@@ -1033,6 +1044,7 @@ export class MonsterSystem {
     }
     m.mesh.position.set(m.x, m.y || 0, m.z);
     m.mesh.rotation.y = m.yaw;
+    this.validateVisual(m);
 
     const d = m.nearD ?? 999;
     const u = m.mesh.userData;
@@ -1161,10 +1173,40 @@ export class MonsterSystem {
     m.mesh.traverse((o) => { if (o.isMesh) o.material.opacity = op; });
   }
 
+  // logical-vs-visual consistency check: if the simulation believes a monster
+  // exists but rendering can't show it, surface a console warning ONCE per
+  // species instead of silently shipping invisible monsters
+  validateVisual(m) {
+    if (m._visWarned) return;
+    if (!m.mesh) {
+      m._visWarned = true;
+      console.error(`[monster] ${m.type}#${m.id} LOGICAL ONLY — mesh missing`);
+      return;
+    }
+    if (!m.mesh.parent) {
+      m._visWarned = true;
+      console.error(`[monster] ${m.type}#${m.id} LOGICAL ONLY — not added to scene`);
+      return;
+    }
+    let anyVisible = false, meshCount = 0;
+    m.mesh.traverse((o) => { if (o.isMesh) { meshCount++; if (o.visible) anyVisible = true; } });
+    if (meshCount === 0 || !anyVisible) {
+      m._visWarned = true;
+      console.error(`[monster] ${m.type}#${m.id} LOGICAL ONLY — ${meshCount} meshes, none visible`);
+    }
+  }
+
   remove(id) {
     const m = this.monsters.get(id);
     if (!m) return;
     this.scene.remove(m.mesh);
+    // free GPU resources — spawned/despawned monsters must not leak
+    m.mesh.traverse((o) => {
+      if (o.isMesh) {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      }
+    });
     this.monsters.delete(id);
   }
 

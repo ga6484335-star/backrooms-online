@@ -171,7 +171,11 @@
 
 <!-- ======================= NOTE OVERLAY ======================= -->
 <div id="note-overlay" class="hidden">
-  <div class="note-paper"><div id="note-text"></div><div class="note-close">[ E ] CLOSE</div></div>
+  <div class="note-paper">
+    <button id="note-x" aria-label="Close note">&times;</button>
+    <div id="note-text"></div>
+    <button id="note-close-btn">CLOSE</button>
+  </div>
 </div>
 
 <div id="pause-overlay" class="hidden">

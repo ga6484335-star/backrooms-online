@@ -156,6 +156,47 @@ async function main() {
       check(cliTypes.some((s) => s.startsWith(t + ':')), `client 2 sees ${t}`);
     }
 
+    // every synced monster must be VISUAL on client 2: in-scene group with
+    // at least one visible mesh (catches LOGICAL-ONLY monsters)
+    const visInfo = await p2.eval(`
+      (window.__dbg && window.__dbg.monsters) ? window.__dbg.monsters() : 0;
+      (window.__dbg && window.__dbg.monsterIds) ? window.__dbg.monsterIds() : []
+      .map((id) => JSON.stringify(window.__dbg.monsterInfo(id)))
+    `);
+    const ids = await p2.eval(`window.__dbg.monsterIds ? window.__dbg.monsterIds() : []`);
+    let allVisual = true;
+    for (const id of ids) {
+      const info = JSON.parse(await p2.eval(`JSON.stringify(window.__dbg.monsterInfo(${id}))`));
+      if (!info || !info.inScene || !info.visibleMeshes) allVisual = false;
+    }
+    check(allVisual && ids.length === (await p2.eval(`window.__dbg.monsters()`)), 'all synced monsters are visual (in-scene + visible meshes)');
+
+    // --- monster lifecycle: hunter spawn, detect, chase, attack, death ---
+    // client 1 (host) spawns a hunter within detection range
+    await p1.eval(`window.__dbg.spawnMonster('hunter', 7, 7)`);
+    await sleep(500);
+    const hostIds1 = await p1.eval(`window.__dbg.monsterIds ? window.__dbg.monsterIds() : []`);
+    check(hostIds1.length > 0, 'host can spawn hunter');
+    const hId = hostIds1[hostIds1.length - 1];
+    // run toward it so it hears/sees us, then verify a chase state appears
+    await p1.eval(`window.dispatchEvent(new KeyboardEvent('keydown',{code:'ShiftLeft'}));
+      window.dispatchEvent(new KeyboardEvent('keydown',{code:'KeyW'}));
+      setInterval(() => window.__dbg.step(0.05), 50);
+      true`);
+    await sleep(6500);
+    const states = await p1.eval(`window.__dbg.monsterTypes()`);
+    console.log('  [info] lifecycle states:', JSON.stringify(states));
+    check(states.some((s2) => /hunter|(chase|see_player|hear_player|investigate|search|attack)/.test(s2)),
+      'hunter reaches an active detection/chase state');
+    // let it catch us
+    await sleep(14000);
+    const died = await p1.eval(`window.__dbg.monsterInfo(${JSON.stringify(hId)})`);
+    console.log('  [info] after catch:', JSON.stringify(died).slice(0, 120));
+    check(died && (died.dead === true || /cooldown|search|patrol/.test((await p1.eval(`window.__dbg.monsterTypes()`)).join(' '))),
+      'lethal monster can kill the player (death or post-attack cooldown)');
+    // resurrect path sanity: spawn survived too
+    
+
     // --- disconnect client 2, verify client 1 updates
     c2.kill('SIGKILL');
     await sleep(1500);

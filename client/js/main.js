@@ -14,6 +14,7 @@ import { RemotePlayers } from './avatar.js';
 import { MonsterSystem } from './monsters/ai.js';
 import { MONSTER_TYPES } from './monsters/defs.js';
 import { HorrorEvents } from './monsters/index.js';
+import { JumpscareDirector } from './jumpscare.js';
 import { Network } from './network.js';
 import { MobileControls } from './mobile.js';
 import { MenuUI } from './menu.js';
@@ -39,6 +40,7 @@ let worldMgr = null;
 let lightMgr = null;
 let monsters = null;
 let events = null;
+let scares = null;
 let mobile = null;
 let gameState = 'menu'; // menu | lobby | playing
 let isHost = false;
@@ -246,6 +248,12 @@ net.on('ev', (m) => {
       if (m.data.pid !== net.id) flashText(`${net.players.get(m.data.pid)?.name || 'SOMEONE'} IS BACK`);
       break;
     }
+    case 'scare': {
+      // shared jumpscare: replay the same puppet locally (small distance
+      // drift is fine — the scare reads identically)
+      if (scares) scares.fire(m.data, player);
+      break;
+    }
     default:
       if (events) events.fire(m.kind, player, m.data);
   }
@@ -365,6 +373,10 @@ function startGame(seed, level) {
   monsters.getLightAt = (x, z) => lightMgr.brightnessAt(x, z);
   events = new HorrorEvents(world, worldMgr, audio, engine, net);
   events.setHostFn(() => isHost);
+  scares = new JumpscareDirector(monsters, lightMgr, audio, engine, player, net,
+    (kind, data) => net.sendEvent(kind, data));
+  scares.setHostFn(() => isHost);
+  scares.onMessage = flashText;
   events.setLightMgr(lightMgr);
   events.onMessage = flashText;
 
@@ -582,9 +594,30 @@ function openNote(n) {
   audio.paper();
 }
 function closeNote() {
+  if (!noteOverlayOpen) return;
   noteOverlayOpen = false;
   E('note-overlay').classList.add('hidden');
+  audio.paper();
+  if (player.mobile && mobile) mobile.show(); // restore touch controls
 }
+
+// note close controls: X button, CLOSE button, tapping the dark backdrop,
+// and keyboard (E handled via doInteract; Esc/X here). Mobile buttons use
+// touchstart so they respond even while pointer lock is unavailable.
+for (const id of ['note-close-btn', 'note-x']) {
+  const el = E(id);
+  el.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); closeNote(); });
+  el.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); closeNote(); }, { passive: false });
+}
+E('note-overlay').addEventListener('touchstart', (e) => {
+  if (e.target === E('note-overlay')) { e.preventDefault(); closeNote(); }
+}, { passive: false });
+window.addEventListener('keydown', (e) => {
+  if (noteOverlayOpen && (e.code === 'Escape' || e.code === 'KeyX')) {
+    e.preventDefault();
+    closeNote();
+  }
+});
 
 function doEmote(e) {
   if (dead) return;
@@ -711,6 +744,9 @@ function registerChunkLights() {
     if (chunk._lightsRegistered) continue;
     chunk._lightsRegistered = true;
     for (const f of chunk.lights) {
+      // never register more fixtures than the light pool can drive —
+      // extra entries only cost update time without producing light
+      if (lightMgr.fixtures.size >= lightMgr.pool.length * 2) break;
       lightMgr.addFixture(f, `${key}:${f.cx},${f.cz}`);
     }
   }
@@ -745,15 +781,63 @@ function morphLogic(dt) {
 }
 
 // ---------------------------------------------------------------------------
+// development-only monster inspector: ?debug=1 (never shown in production)
+const DEBUG = new URLSearchParams(location.search).has('debug');
+let debugEl = null, debugT = 0;
+if (DEBUG) {
+  debugEl = document.createElement('pre');
+  debugEl.id = 'debug-panel';
+  debugEl.style.cssText = 'position:fixed;top:8px;left:8px;z-index:99;color:#7f7;'
+    + 'background:rgba(0,0,0,.55);font:10px monospace;padding:6px;pointer-events:none;'
+    + 'max-width:340px;white-space:pre-wrap;';
+  document.body.appendChild(debugEl);
+}
+function debugUpdate(dt) {
+  if (!DEBUG || !debugEl) return;
+  debugT += dt;
+  if (debugT < 0.25) return;
+  debugT = 0;
+  if (!window.__fps) return;
+  if (gameState !== 'playing' || !monsters) { debugEl.textContent = `state=${gameState}`; return; }
+  const lines = [`fps=${(window.__fps || 0).toFixed(0)} state=${gameState} ms=${monsters.monsters.size}`];
+  for (const m of monsters.monsters.values()) {
+    const d = Math.hypot(m.x - player.pos.x, m.z - player.pos.z);
+    lines.push(
+      `#${m.id} ${m.type} [${m.x.toFixed(0)},${m.z.toFixed(0)}] ${m.state}`
+      + ` d=${d.toFixed(0)} vis=${m.mesh.visible}${m.private ? ' PRIV' : ''}${m.target ? ' tgt=' + m.target.id : ''}`);
+  }
+  debugEl.textContent = lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
 // main loop
 let last = performance.now();
 let sendAcc = 0;
+let fpsFrames = 0, fpsTime = 0, fpsValue = 60, lowFpsT = 0, autoDropped = false;
 
 function loop() {
   requestAnimationFrame(loop);
   const now = performance.now();
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
+
+  // fps meter + one-step auto quality safeguard (never below LOW)
+  fpsFrames++; fpsTime += dt;
+  if (fpsTime >= 1) { fpsValue = fpsFrames / fpsTime; fpsFrames = 0; fpsTime = 0; window.__fps = fpsValue; }
+  if (!autoDropped && settings) {
+    if (fpsValue < 24) {
+      lowFpsT += dt;
+      if (lowFpsT > 12) {
+        autoDropped = true;
+        const order = ['low', 'medium', 'high', 'ultra'];
+        const i = order.indexOf(settings.quality);
+        if (i > 0) {
+          applySettings({ ...settings, quality: order[i - 1] });
+          console.warn(`[perf] sustained low fps (${fpsValue.toFixed(0)}) — quality auto-dropped to ${settings.quality}`);
+        }
+      }
+    } else lowFpsT = Math.max(0, lowFpsT - dt * 2);
+  }
 
   if (gameState !== 'playing' || !world) return;
 
@@ -789,6 +873,8 @@ function loop() {
   remotePlayers.update(dt, camera.position);
   monsters.update(dt, player, remotePlayers, null);
   events.update(dt, player);
+  if (scares && !dead) scares.update(dt, player, remotePlayers);
+  debugUpdate(dt);
   morphLogic(dt);
 
   // host streams monsters at 8Hz
@@ -884,6 +970,7 @@ function leaveToMenu() {
     for (const id of [...monsters.monsters.keys()]) monsters.remove(id);
     monsters = null;
   }
+  scares = null;
   for (const id of [...remotePlayers.players.keys()]) remotePlayers.remove(id);
   menu.showMenu();
   menu.setStatus('SIGNAL OK');
@@ -901,6 +988,30 @@ window.__dbg = {
   flash: () => (flash ? { on: flash.on, battery: flash.battery } : null),
   monsters: () => (monsters ? monsters.monsters.size : 0),
   monsterTypes: () => (monsters ? [...monsters.monsters.values()].map((m) => `${m.type}:${m.state}`) : []),
+  monsterIds: () => (monsters ? [...monsters.monsters.keys()] : []),
+  placeNote: (dx, dz) => {
+    if (!worldMgr) return null;
+    const n = { x: player.pos.x + dx, z: player.pos.z + dz, id: `note:test:${Date.now()}` };
+    // nearest loaded chunk's notes list is what nearestInteractable scans
+    const chunk = [...worldMgr.chunks.values()][0];
+    if (!chunk) return null;
+    chunk.notes.push(n);
+    return n.id;
+  },
+  monsterInfo: (id) => {
+    if (!monsters) return null;
+    const m = [...monsters.monsters.values()].find((mm) => mm.id === id);
+    if (!m) return null;
+    let vis = 0, total = 0;
+    m.mesh.traverse((o) => { if (o.isMesh) { total++; if (o.visible) vis++; } });
+    return {
+      type: m.type, state: m.state, pos: [m.x, m.y || 0, m.z],
+      inScene: !!m.mesh.parent, visibleMeshes: vis, meshCount: total,
+      hasLOS: monsters.hasLOS(player.pos.x, player.pos.z, m.x, m.z),
+      dead: player.dead, anim: player.anim,
+    };
+  },
+  scareT: () => (scares && scares.active ? scares.active.type : null),
   spawnMonster: (type, dx = 5, dz = 5) => (monsters ? monsters.spawnMonster(type, player.pos.x + dx, player.pos.z + dz).id : -1),
   doors: () => (worldMgr ? [...worldMgr.doorIndex.values()].map((d) => ({
     key: `${d.cx},${d.cz},${d.dir}`, x: d.x, z: d.z, locked: d.locked, open: d.open,
@@ -911,7 +1022,13 @@ window.__dbg = {
   interact: () => { currentInteract = findInteractable(); doInteract(); return currentInteract ? currentInteract.type : null; },
   prompt: () => (E('interact-text') ? E('interact-text').textContent : null),
   nearInteractable: () => findInteractable(),
-  teleport: (x, z, yaw = 0) => { player.pos.x = x; player.pos.z = z; player.yaw = yaw; },
+  placedNotes: () => {
+    let out = [];
+    if (worldMgr) for (const c of worldMgr.chunks.values()) out = out.concat(c.notes);
+    return out;
+  },
+  teleport: (x, z, yaw = 0) => { player.pos.x = x; player.pos.z = z; player.yaw = player.yawTarget = yaw; },
+  step: (dt) => { player.update(dt, world, worldMgr); },
   remoteAnims: () => (remotePlayers ? [...remotePlayers.players.values()].map((p) => p.anim) : []),
   remoteY: () => (remotePlayers ? [...remotePlayers.players.values()].map((p) => p.cur.y) : []),
 };
