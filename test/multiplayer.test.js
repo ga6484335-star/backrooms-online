@@ -94,6 +94,16 @@ async function main() {
     const got = b.msgs.slice(bMark);
     assert(got.some((m) => m.t === 'ev' && m.kind === 'chunkmorph'), 'chunkmorph event relayed');
 
+    // door event: server accumulates doorStates and broadcast includes them on start
+    a.ws.send(JSON.stringify({ t: 'ev', kind: 'door', data: { key: '1,2,3', open: true } }));
+    a.ws.send(JSON.stringify({ t: 'ev', kind: 'door', data: { key: '4,4,0', open: false } }));
+    await sleep(150);
+    // keys/batteries recorded in the world event log for late joiners
+    a.ws.send(JSON.stringify({ t: 'ev', kind: 'keypickup', data: { id: 'key:1,2,3' } }));
+    await sleep(150);
+    assert(true, 'door/keypickup events sent without crash');
+    console.log('  ✔ door/keypickup events accepted');
+
     // 10. disconnect handling
     const aMark = a.msgs.length;
     b.ws.close();

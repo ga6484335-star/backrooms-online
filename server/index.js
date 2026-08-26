@@ -92,7 +92,10 @@ wss.on('connection', (ws) => {
         if (!room || room.hostId !== player.id) break;
         room.state = 'playing';
         room.level = (msg.level | 0) || 0;
-        room.broadcast({ t: 'start', level: room.level, seed: room.seed });
+        room.broadcast({
+          t: 'start', level: room.level, seed: room.seed,
+          doorStates: Object.fromEntries(room.doorStates),
+        });
         break;
       }
       case 'u': {

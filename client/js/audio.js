@@ -473,6 +473,34 @@ export class AudioEngine {
     o.start(t); o.stop(t + 1.2);
   }
 
+  doorLocked(x, z) {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const p = this.panner(x, 1.2, z);
+    for (let i = 0; i < 2; i++) {
+      const o = ctx.createOscillator(); o.type = 'square';
+      o.frequency.value = 240 - i * 60;
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 500; f.Q.value = 6;
+      const g = ctx.createGain();
+      this._env(g, t + i * 0.13, 0.005, 0.09, 0.22);
+      o.connect(f).connect(g).connect(p).connect(this.master);
+      o.start(t + i * 0.13); o.stop(t + i * 0.13 + 0.12);
+    }
+  }
+
+  keyPick() {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    for (let i = 0; i < 3; i++) {
+      const o = ctx.createOscillator(); o.type = 'sine';
+      o.frequency.value = 1400 + i * 700;
+      const g = ctx.createGain();
+      this._env(g, t + i * 0.04, 0.002, 0.1, 0.12);
+      o.connect(g).connect(this.master);
+      o.start(t + i * 0.04); o.stop(t + i * 0.04 + 0.14);
+    }
+  }
+
   doorSlam(x, z) {
     if (!this.ensure()) return;
     const ctx = this.ctx, t = ctx.currentTime;

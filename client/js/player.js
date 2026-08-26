@@ -229,9 +229,11 @@ export class PlayerController {
     const mx = (Math.sin(t * 31.7) + Math.sin(t * 47.3)) * micro;
     const my = (Math.sin(t * 28.3 + 1) + Math.sin(t * 52.1)) * micro;
 
-    // focus hunting: subtle fov breathing
+    // focus hunting: subtle fov breathing + threat flinch (the camera
+    // operator jerks toward a visible monster — autofocus strains on it)
+    this.flinch = Math.max(0, (this.flinch || 0) - dt * 0.5);
     const focusPulse = Math.sin(this.focusT * 0.9) * 0.5 + Math.sin(this.focusT * 0.23) * 0.5;
-    const fov = 72 + focusPulse * 0.6;
+    const fov = 72 + focusPulse * 0.6 - this.flinch * 6.5;
     if (Math.abs(this.camera.fov - fov) > 0.01) {
       this.camera.fov = fov;
       this.camera.updateProjectionMatrix();

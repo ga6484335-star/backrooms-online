@@ -24,6 +24,7 @@ class Room {
     this.createdAt = Date.now();
     this.eventSeq = 0;
     this.eventLog = [];       // recent world events for late joiners
+    this.doorStates = new Map(); // door key -> open boolean (authoritative)
     this.monsterState = {};   // last reported monster snapshot per monster id
   }
 
@@ -99,7 +100,9 @@ class Room {
       }
     }
     // Remember a small window of world-affecting events so late joiners can catch up
-    if (WORLD_EVENTS.has(kind)) {
+    if (kind === 'door' && data && data.key !== undefined) {
+      this.doorStates.set(String(data.key), !!data.open);
+    } else if (WORLD_EVENTS.has(kind)) {
       this.eventLog.push(msg);
       if (this.eventLog.length > 64) this.eventLog.shift();
     }
@@ -109,7 +112,7 @@ class Room {
   isEmpty() { return this.players.size === 0; }
 }
 
-const WORLD_EVENTS = new Set(['reldoor', 'chunkmorph', 'lightdie', 'spawnmonster', 'caught', 'died', 'respawn']);
+const WORLD_EVENTS = new Set(['reldoor', 'chunkmorph', 'lightdie', 'spawnmonster', 'caught', 'died', 'respawn', 'door', 'keypickup', 'battpickup']);
 
 function pickColor(i) {
   const colors = ['#d9b46c', '#8fa3c7', '#a3c78f', '#c78f8f', '#b48fd9', '#7ec8c8', '#c7b1a0', '#9ec78f'];

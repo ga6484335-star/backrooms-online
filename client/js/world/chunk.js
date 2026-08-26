@@ -9,6 +9,40 @@ import { hashStr, rngFrom, chance, range, intRange } from '../rng.js';
 import { getLevel } from '../levels.js';
 import { materialsFor } from '../materials.js';
 
+// door leaf materials (cached per level): aged painted wood / metal handle
+const doorMatCache = new Map();
+function doorMaterial(levelDef) {
+  if (!doorMatCache.has(levelDef.id)) {
+    const c = levelDef.palette.wall;
+    doorMatCache.set(levelDef.id, new THREE.MeshStandardMaterial({
+      color: new THREE.Color(c[0] * 0.38 / 255, c[1] * 0.33 / 255, c[2] * 0.30 / 255),
+      roughness: 0.82, metalness: 0.04,
+    }));
+  }
+  return doorMatCache.get(levelDef.id);
+}
+const handleMat = new THREE.MeshStandardMaterial({ color: 0x8a7a52, roughness: 0.45, metalness: 0.8 });
+
+function makeDoorLeaf(levelDef, quality) {
+  const pivot = new THREE.Group();
+  const mat = doorMaterial(levelDef);
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(1.52, 2.04, 0.06), mat);
+  panel.position.set(0.77, 1.03, 0);
+  // recessed relief so it reads as a door, not a slab
+  const relief = new THREE.Mesh(new THREE.BoxGeometry(1.16, 1.62, 0.025), mat);
+  relief.position.set(0.77, 1.0, 0.045);
+  const relief2 = relief.clone();
+  relief2.position.z = -0.045;
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.2, 7), handleMat);
+  handle.rotation.z = Math.PI / 2;
+  handle.position.set(1.3, 1.0, 0.09);
+  const handle2 = handle.clone();
+  handle2.position.z = -0.09;
+  pivot.add(panel, relief, relief2, handle, handle2);
+  panel.castShadow = quality === 'high' || quality === 'ultra';
+  return pivot;
+}
+
 export function buildChunk(world, chunkX, chunkZ, opts) {
   const seed = world.seed;
   const level = world.level;
@@ -29,6 +63,7 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
   const lights = [];
   const specials = [];
   const notes = [];
+  const lockedDoors = [];           // for key spawning
 
   for (let cc = 0; cc < CELLS_PER_CHUNK; cc++) {
     for (let cr = 0; cr < CELLS_PER_CHUNK; cr++) {
@@ -112,11 +147,31 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
         const wcol = scaleColor(levelDef.palette.wall, tint);
         if (info.door) {
           pushDoorWall(gb, dir, wx, wz, CELL, wallH, wcol);
-          doors.push({
+          // door leaf as a pivot group (hinge at the jamb) so it can swing open
+          const dRng = rngFrom(hashStr(seed, `door:${cx},${cz},${dir}`));
+          const locked = chance(dRng, 0.12);
+          const startsOpen = !locked && chance(dRng, 0.25);
+          const swing = chance(dRng, 0.5) ? 1 : -1;
+          const baseRot = dir === 0 ? -Math.PI / 2 : 0;
+          const hx = dir === 0 ? wx + CELL : wx + CELL / 2 - 0.77;
+          const hz = dir === 0 ? wz + CELL / 2 - 0.77 : wz + CELL;
+          const pivot = makeDoorLeaf(levelDef, quality);
+          pivot.position.set(hx, 0, hz);
+          pivot.rotation.y = baseRot + (startsOpen ? swing * 1.92 : 0);
+          group.add(pivot);
+          const doorCollider = dir === 0
+            ? { x: wx + CELL, z: wz + CELL / 2, hw: 0.12, hd: 0.78, disabled: startsOpen }
+            : { x: wx + CELL / 2, z: wz + CELL, hw: 0.78, hd: 0.12, disabled: startsOpen };
+          colliders.push(doorCollider);
+          const entry = {
             cx, cz, dir,
             x: dir === 0 ? wx + CELL : wx + CELL / 2,
             z: dir === 1 ? wz + CELL : wz + CELL / 2,
-          });
+            pivot, baseRot, swing, collider: doorCollider,
+            locked, open: startsOpen,
+          };
+          doors.push(entry);
+          if (locked) lockedDoors.push(entry);
           // door jambs become colliders (player can't clip through sides)
           const half = (CELL - 1.6) / 2;
           if (dir === 0) {
@@ -255,6 +310,25 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
       if (cell.special) {
         pushSpecial(world, cell, gb, colliders, specials);
       }
+    }
+  }
+
+  // rusty keys: one per locked door, hidden somewhere in the same chunk
+  for (const d of lockedDoors) {
+    const kRng = rngFrom(hashStr(seed, `keyspawn:${d.cx},${d.cz},${d.dir}`));
+    for (let tries = 0; tries < 8; tries++) {
+      const kcx = baseCellX + intRange(kRng, 0, CELLS_PER_CHUNK - 1);
+      const kcz = baseCellZ + intRange(kRng, 0, CELLS_PER_CHUNK - 1);
+      const kc = world.cellAt(kcx, kcz);
+      if (kc.special || kc.water) continue;
+      const kx = kcx * CELL + range(kRng, 0.7, CELL - 0.7);
+      const kz = kcz * CELL + range(kRng, 0.7, CELL - 0.7);
+      const kb = makeShiftBuilder(gb, kx, kz, range(kRng, 0, Math.PI * 2));
+      kb.box(0.16, 0.025, 0.05, 0, 0.06, 0, [186, 150, 66]);       // shaft
+      kb.box(0.05, 0.025, 0.05, 0.08, 0.045, 0, [186, 150, 66]);   // tooth
+      kb.cylinder(0.045, 0.02, -0.1, 0.06, 0, [186, 150, 66]);     // bow
+      notes.push({ x: kx, z: kz, id: `key:${d.cx},${d.cz},${d.dir}`, key: true });
+      break;
     }
   }
 
@@ -496,6 +570,7 @@ export class WorldManager {
     this.quality = quality;
     this.chunks = new Map();
     this.morphBuf = [];
+    this.doorIndex = new Map(); // "cx,cz,dir" -> door entry of loaded chunks
     this.setQuality(quality);
     this._colliderBuf = [];
   }
@@ -542,6 +617,7 @@ export class WorldManager {
       notes: group.userData.notes,
       lightMesh: group.getObjectByName('lightpanels'),
     });
+    for (const d of group.userData.doors) this.doorIndex.set(`${d.cx},${d.cz},${d.dir}`, d);
     // flush queued morphs for this chunk
     for (let i = this.morphBuf.length - 1; i >= 0; i--) {
       const m = this.morphBuf[i];
@@ -560,6 +636,7 @@ export class WorldManager {
     if (!chunk) return;
     this.scene.remove(chunk.group);
     chunk.group.traverse((obj) => { if (obj.isMesh) obj.geometry.dispose(); });
+    for (const d of chunk.doors) this.doorIndex.delete(`${d.cx},${d.cz},${d.dir}`);
     this.chunks.delete(key);
   }
 
@@ -581,7 +658,7 @@ export class WorldManager {
     for (let dz = -1; dz <= 1; dz++) {
       for (let dx = -1; dx <= 1; dx++) {
         const chunk = this.chunks.get(this.chunkKey(pcx + dx, pcz + dz));
-        if (chunk) for (const c of chunk.colliders) out.push(c);
+        if (chunk) for (const c of chunk.colliders) { if (!c.disabled) out.push(c); }
       }
     }
     return out;
@@ -592,7 +669,7 @@ export class WorldManager {
     for (const chunk of this.chunks.values()) {
       for (const n of chunk.notes) {
         const d = Math.hypot(n.x - px, n.z - pz);
-        if (d < bestD) { best = { type: n.battery ? 'battery' : 'note', data: n, dist: d }; bestD = d; }
+        if (d < bestD) { best = { type: n.key ? 'key' : n.battery ? 'battery' : 'note', data: n, dist: d }; bestD = d; }
       }
       for (const d of chunk.doors) {
         const dd = Math.hypot(d.x - px, d.z - pz);
@@ -608,6 +685,28 @@ export class WorldManager {
       if (i >= 0) { chunk.notes.splice(i, 1); return true; }
     }
     return false;
+  }
+
+  // ---------------------------------------------------------------- doors
+  doorAt(key) { return this.doorIndex.get(key) || null; }
+
+  setDoorOpen(key, open) {
+    const d = this.doorIndex.get(key);
+    if (!d) return false;
+    d.open = open;
+    if (d.collider) d.collider.disabled = open;
+    return true;
+  }
+
+  // ease door leaves toward their target rotation; call every frame
+  updateDoors(dt) {
+    for (const d of this.doorIndex.values()) {
+      const target = d.baseRot + (d.open ? d.swing * 1.92 : 0);
+      const cur = d.pivot.rotation.y;
+      if (Math.abs(target - cur) > 0.002) {
+        d.pivot.rotation.y = cur + (target - cur) * Math.min(1, dt * 4.5);
+      }
+    }
   }
 
   monstersSpawnCell(px, pz) {

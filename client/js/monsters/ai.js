@@ -43,6 +43,7 @@ export class MonsterSystem {
     this.onScare = null; // non-lethal contact scare (hollow touch)
     this.lightMgr = null; // wired by main.js so monsters can kill lights
     this.getLightAt = () => 0.5;
+    this.nearestThreat = null; // closest visible monster, for camera flinch
     this.getPlayers = null;
 
     // pacing state machine: quiet -> uneasy -> encounter -> cooldown -> quiet
@@ -53,6 +54,8 @@ export class MonsterSystem {
 
     // horror director inputs, fed from the main loop
     this.director = { distance: 0, timePlayed: 0, deaths: 0, players: 1 };
+    this.encounters = 0;      // total monsters spawned (guarantee+escalation)
+    this.encounterAgo = 0;    // seconds since the last spawn
 
     this.hallucTimer = 50 + Math.random() * 60;
   }
@@ -69,6 +72,7 @@ export class MonsterSystem {
   // ------------------------------------------------------------- spawning
   hostSpawnLogic(dt, player, players) {
     this.pacingT -= dt;
+    this.encounterAgo += dt;
 
     // dwell tracking: lingering in one cell raises danger
     const cc = `${Math.floor(player.pos.x / CELL)},${Math.floor(player.pos.z / CELL)}`;
@@ -92,9 +96,19 @@ export class MonsterSystem {
           // distance-based escalation: the deeper you travel, the hungrier it gets
           const dist = this.director.distance;
           const depthBonus = dist < 120 ? -0.25 : dist < 400 ? 0 : Math.min(0.2, (dist - 400) / 2000);
-          const chanceOf = 0.35 + darkness * 0.2 + noise + dwell + crowd + depthBonus - active.length * 0.25;
+          let chanceOf = 0.35 + darkness * 0.2 + noise + dwell + crowd + depthBonus - active.length * 0.25;
+          // guaranteed encounters: past ~100m the director WILL bring the
+          // first one; afterwards the chance creeps up the longer it's quiet
+          let guaranteed = false;
+          if (this.encounters === 0 && dist > 100) { chanceOf = 1; guaranteed = true; }
+          else if (dist > 160 && this.encounterAgo > 60) chanceOf = Math.min(1, chanceOf + (this.encounterAgo - 60) / 90);
           const globalCap = 3 + playerCount;
-          if (Math.random() < chanceOf && active.length < globalCap) {
+          // first-encounter guarantee must not be eaten by a lingering idle
+          // silhouette: dormant mood species don't count against the cap there
+          const blockers = guaranteed
+            ? active.filter((m) => m.def.lethal && !['idle', 'dormant', 'watch'].includes(m.state))
+            : active;
+          if (Math.random() < chanceOf && blockers.length < globalCap) {
             const pool = LEVEL_POOLS[this.world.level] || LEVEL_POOLS[0];
             const countOf = (t) => active.filter((m) => m.type === t).length;
             const valid = (t) => {
@@ -110,11 +124,13 @@ export class MonsterSystem {
             for (let tries = 0; tries < 6 && !type; tries++) {
               const cand = pool[(Math.random() * pool.length) | 0];
               if (!valid(cand)) continue;
-              const r = MONSTER_TYPES[cand].rarity ?? 0.1;
+              const r = guaranteed ? 1 : (MONSTER_TYPES[cand].rarity ?? 0.1);
               if (Math.random() < r * 3.2) type = cand; // rarity 0.02 → 6.4%/try
             }
+            const watchers = [{ x: player.pos.x, z: player.pos.z, yaw: player.yaw },
+              ...(players || []).map((p) => ({ x: p.x, z: p.z, yaw: p.yaw }))];
             if (type) {
-              const spawned = this.spawnPlaced(type, player.pos.x, player.pos.z);
+              const spawned = this.spawnPlaced(type, player.pos.x, player.pos.z, watchers);
               if (spawned) {
                 // packs: some species arrive together
                 const pack = Math.min(3, MONSTER_TYPES[type].pack || 1);
@@ -124,6 +140,8 @@ export class MonsterSystem {
                     this.spawnMonster(type, (cell[0] + 0.5) * CELL, (cell[1] + 0.5) * CELL);
                   }
                 }
+                this.encounters++;
+                this.encounterAgo = 0;
                 this.pacing = 'encounter';
                 this.pacingT = 40 + Math.random() * 40;
                 break;
@@ -149,23 +167,38 @@ export class MonsterSystem {
     }
   }
 
-  // pick a sensible spawn position for the species: far figures materialise
-  // far down the corridors, ambushers near the player, the rest in between
-  spawnPlaced(type, px, pz) {
+  // pick a sensible spawn position for the species, never inside a player's
+  // view cone — encounters emerge from corners, darkness, unexplored rooms
+  spawnPlaced(type, px, pz, watchers = []) {
     const def = MONSTER_TYPES[type];
+    // rejects a spot if any player within 50m has line of sight on it while
+    // the spot sits inside their view cone (they'd see it materialise)
+    const blocked = (sx, sz) => watchers.some((w) => {
+      const dx = sx - w.x, dz = sz - w.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 0.01) return true;
+      if (d > 50) return false;
+      const fx = -Math.sin(w.yaw || 0), fz = -Math.cos(w.yaw || 0);
+      if ((dx * fx + dz * fz) / d > 0.4 && this.hasLOS(w.x, w.z, sx, sz)) return true;
+      return false;
+    });
     if (def.farSpawn) {
       for (let i = 0; i < 12; i++) {
         const a = Math.random() * Math.PI * 2;
         const d = 55 + Math.random() * (Math.min(220, def.despawnDist * 0.7) - 55);
-        const cx = Math.floor((px + Math.cos(a) * d) / CELL);
-        const cz = Math.floor((pz + Math.sin(a) * d) / CELL);
-        if (!this.world.cellAt(cx, cz).special) {
+        const sx = px + Math.cos(a) * d, sz = pz + Math.sin(a) * d;
+        const cx = Math.floor(sx / CELL), cz = Math.floor(sz / CELL);
+        if (!blocked(sx, sz) && !this.world.cellAt(cx, cz).special) {
           return this.spawnMonster(type, (cx + 0.5) * CELL, (cz + 0.5) * CELL);
         }
       }
     }
-    const cell = this.worldMgr.monstersSpawnCell(px, pz);
-    return this.spawnMonster(type, (cell[0] + 0.5) * CELL, (cell[1] + 0.5) * CELL);
+    for (let tries = 0; tries < 8; tries++) {
+      const cell = this.worldMgr.monstersSpawnCell(px, pz);
+      const sx = (cell[0] + 0.5) * CELL, sz = (cell[1] + 0.5) * CELL;
+      if (!blocked(sx, sz)) return this.spawnMonster(type, sx, sz);
+    }
+    return null;
   }
 
   spawnMonster(type, x, z, forcedId) {
@@ -245,12 +278,16 @@ export class MonsterSystem {
       const nd = Math.hypot(dx, dz);
       let seen = false, heard = false;
       if (m.def.vision > 0 && nd < m.def.vision) {
-        if (this.hasLOS(m.x, m.z, p.x, p.z)) {
+        // field of view: monsters yaw with atan2(dx,dz) so their forward is (sin,cos)
+        const fov = ((m.def.fov ?? 120) / 2) * (Math.PI / 180);
+        const fwx = Math.sin(m.yaw), fwz = Math.cos(m.yaw);
+        const inCone = nd < 0.9 || ((fwx * dx + fwz * dz) / nd) > Math.cos(fov);
+        if (inCone && this.hasLOS(m.x, m.z, p.x, p.z)) {
           const light = this.getLightAt(p.x, p.z);
           const flash = p.fl ? 1.6 : 1;
           const moving = p.anim === 'run' ? 1.25 : p.anim === 'walk' ? 1 : 0.65;
           const effRange = m.def.vision * (0.35 + light * 0.65) * flash * moving;
-          if (nd < effRange) seen = true;
+          if (nd < effRange) seen = true; else if (nd < 1.2) seen = true; // point-blank regardless
         }
       }
       if (m.def.hearing > 0 && nd < m.def.hearing) {
@@ -305,11 +342,15 @@ export class MonsterSystem {
 
     const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw);
     const remove = [];
+    let threat = null, threatD = 999;
     for (const m of this.monsters.values()) {
       m.life += dt;
       m.stateT += dt;
       const d = Math.hypot(m.x - ppos[0], m.z - ppos[2]);
       m.nearD = d;
+      if (!m.private && d < 25 && d < threatD && this.hasLOS(player.pos.x, player.pos.z, m.x, m.z)) {
+        threat = m; threatD = d;
+      }
       // local observation: the player's gaze — drives pose-snapping creatures
       const dx = m.x - ppos[0], dz = m.z - ppos[2];
       m.observed = d < 90 && d > 0.01 && (dx * fx + dz * fz) / d > 0.93;
@@ -337,6 +378,8 @@ export class MonsterSystem {
       if (d < 6 && this.onNearCallback) this.onNearCallback(m, d);
     }
     for (const id of remove) this.remove(id);
+    // nearest visible threat — camera body language (flinch) reads this
+    this.nearestThreat = threat && threatD < 999 ? { def: threat.def, d: threatD } : null;
   }
 
   // monsters brush against the world: doors groan when they pass through,

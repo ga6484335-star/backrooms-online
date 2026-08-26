@@ -44,7 +44,8 @@ let gameState = 'menu'; // menu | lobby | playing
 let isHost = false;
 let settings = null;
 let startTime = 0;
-let doorStates = new Map(); // "cx,cz,dir" -> {open:boolean}
+let doorToggles = new Map(); // "cx,cz,dir" -> boolean (net-synced; render state applied on chunk load)
+let keyInventory = new Set(); // held rusty keys
 let noteOverlayOpen = false;
 let flash = null;
 let dead = false;           // local player death state
@@ -150,7 +151,14 @@ net.on('host', (m) => {
   if (net.room) net.room.host = m.id;
   menu.updateLobby({ ...net.room, players: [...net.players.values()], meId: net.id });
 });
-net.on('start', (m) => { startGame(m.seed, m.level); });
+net.on('start', (m) => {
+  startGame(m.seed, m.level);
+  // peers inherit doors the host (or earlier players) already toggled
+  for (const [k, v] of Object.entries(m.doorStates || {})) {
+    doorToggles.set(k, v);
+    worldMgr.setDoorOpen(k, v);
+  }
+});
 net.on('st', (m) => { if (gameState === 'playing') remotePlayers.applyState(m.list, net.id); });
 net.on('ms', (m) => { if (monsters && !isHost) monsters.applySnapshot(m.list); });
 net.on('ev', (m) => {
@@ -164,8 +172,15 @@ net.on('ev', (m) => {
     }
     case 'chunkmorph': if (worldMgr) worldMgr.applyMorph(m.data); break;
     case 'lightdie': if (lightMgr) lightMgr.killFixture(m.data.key); break;
-    case 'door': doorStates.set(m.data.key, { open: m.data.open }); break;
-    case 'battpickup': if (worldMgr) worldMgr.removeInteractable(m.data.id); break;
+    case 'door':
+      doorToggles.set(m.data.key, m.data.open);
+      if (worldMgr) worldMgr.setDoorOpen(m.data.key, m.data.open);
+      break;
+    case 'battpickup': case 'keypickup': {
+      const removed = worldMgr ? worldMgr.removeInteractable(m.data.id) : false;
+      if (removed && m.kind === 'keypickup') keyInventory.add(m.data.id);
+      break;
+    }
     case 'noclip': levelTransition(m.data.level); break;
     case 'caught': {
       // someone was caught — if it was us, death flow runs locally via onCaught
@@ -221,6 +236,8 @@ function startGame(seed, level) {
   flash = new Flashlight(camera, scene, audio, settings.quality);
   dead = false;
   respawnT = 0;
+  doorToggles = new Map();
+  keyInventory = new Set();
 
   monsters.onNearCallback = (m, d) => {
     player.trauma(Math.max(0, 1 - d / 6) * 0.4);
@@ -344,8 +361,10 @@ function respawn() {
 function levelTransition(level) {
   if (!world) return;
   world.setLevel(level);
-  // rebuild surroundings
+  // rebuild surroundings — door state and keys belong to the old level
   for (const key of [...worldMgr.chunks.keys()]) worldMgr.unload(key);
+  doorToggles = new Map();
+  keyInventory = new Set();
   const levelDef = getLevel(level);
   scene.fog = new THREE.FogExp2(levelDef.palette.fog, levelDef.palette.fogDensity);
   scene.background = new THREE.Color(levelDef.palette.fog);
@@ -369,6 +388,13 @@ function findInteractable() {
   return it;
 }
 
+function doorPromptText(d) {
+  const key = `${d.cx},${d.cz},${d.dir}`;
+  if (d.locked) return keyInventory.has(`key:${key}`) ? 'UNLOCK DOOR' : 'LOCKED — REQUIRES KEY';
+  const open = doorToggles.has(key) ? doorToggles.get(key) : d.open;
+  return open ? 'CLOSE DOOR' : 'OPEN DOOR';
+}
+
 function doInteract() {
   if (dead) return;
   if (noteOverlayOpen) { closeNote(); return; }
@@ -381,18 +407,30 @@ function doInteract() {
     worldMgr.removeInteractable(it.data.id);
     net.sendEvent('battpickup', { id: it.data.id }); // other clients remove it too
     flashText('BATTERY FOUND');
+  } else if (it.type === 'key') {
+    keyInventory.add(it.data.id);
+    worldMgr.removeInteractable(it.data.id);
+    net.sendEvent('keypickup', { id: it.data.id });
+    audio.keyPick();
+    flashText('RUSTY KEY FOUND');
   } else if (it.type === 'door') {
-    const key = `${it.data.cx},${it.data.cz},${it.data.dir}`;
-    const st = doorStates.get(key) || { open: false };
-    st.open = !st.open;
-    doorStates.set(key, st);
-    net.sendEvent('door', { key, open: st.open });
-    audio.doorCreak(it.data.x, it.data.z);
+    const d = it.data;
+    const key = `${d.cx},${d.cz},${d.dir}`;
+    if (d.locked && !keyInventory.has(`key:${key}`)) {
+      audio.doorLocked(d.x, d.z);
+      flashText('LOCKED');
+      return;
+    }
+    const open = !(doorToggles.has(key) ? doorToggles.get(key) : d.open);
+    doorToggles.set(key, open);
+    worldMgr.setDoorOpen(key, open);
+    net.sendEvent('door', { key, open });
+    if (open) audio.doorCreak(d.x, d.z); else audio.doorSlam(d.x, d.z);
     // is this a noclip door? (special room door)
-    const cell = world.cellAt(it.data.cx, it.data.cz);
+    const cell = world.cellAt(d.cx, d.cz);
     const sp = cell.special;
     if (sp && sp.type === 'noclipdoor' && isHost) {
-      const rng = rngFrom(hashStr(world.seed, `noclip:${it.data.cx},${it.data.cz}`));
+      const rng = rngFrom(hashStr(world.seed, `noclip:${d.cx},${d.cz}`));
       const dest = nextLevelFrom(rng, world.level);
       net.sendEvent('noclip', { level: dest });
       levelTransition(dest);
@@ -588,6 +626,8 @@ function loop() {
     player.update(dt, world, worldMgr);
     distTravelled += Math.hypot(player.pos.x - px0, player.pos.z - pz0);
     if (monsters) {
+      const t = monsters.nearestThreat;
+      if (t) player.flinch = Math.min(1, (24 - t.d) / 24 * (t.def.lethal ? 1 : 0.55));
       monsters.director.distance = distTravelled;
       monsters.director.timePlayed = (now - startTime) / 1000;
       monsters.director.players = net.players.size;
@@ -604,6 +644,7 @@ function loop() {
   }
   player.flashOn = flash && flash.on ? 1 : 0;
   worldMgr.ensure(player.pos.x, player.pos.z);
+  worldMgr.updateDoors(dt);
   registerChunkLights();
   lightMgr.update(dt, player.pos.x, player.pos.z, camera);
   if (flash) flash.update(dt);
@@ -637,7 +678,8 @@ function loop() {
     E('interact-text').textContent =
       currentInteract.type === 'note' ? 'READ NOTE'
       : currentInteract.type === 'battery' ? 'TAKE BATTERY'
-      : 'OPEN DOOR';
+      : currentInteract.type === 'key' ? 'TAKE RUSTY KEY'
+      : doorPromptText(currentInteract.data);
   } else {
     prompt.classList.add('hidden');
   }
@@ -719,6 +761,16 @@ window.__dbg = {
   monsters: () => (monsters ? monsters.monsters.size : 0),
   monsterTypes: () => (monsters ? [...monsters.monsters.values()].map((m) => `${m.type}:${m.state}`) : []),
   spawnMonster: (type, dx = 5, dz = 5) => (monsters ? monsters.spawnMonster(type, player.pos.x + dx, player.pos.z + dz).id : -1),
+  doors: () => (worldMgr ? [...worldMgr.doorIndex.values()].map((d) => ({
+    key: `${d.cx},${d.cz},${d.dir}`, x: d.x, z: d.z, locked: d.locked, open: d.open,
+    rot: d.pivot ? d.pivot.rotation.y : null,
+    dist: Math.hypot(d.x - player.pos.x, d.z - player.pos.z),
+  })) : []),
+  keys: () => [...keyInventory],
+  interact: () => { currentInteract = findInteractable(); doInteract(); return currentInteract ? currentInteract.type : null; },
+  prompt: () => (E('interact-text') ? E('interact-text').textContent : null),
+  nearInteractable: () => findInteractable(),
+  teleport: (x, z, yaw = 0) => { player.pos.x = x; player.pos.z = z; player.yaw = yaw; },
   remoteAnims: () => (remotePlayers ? [...remotePlayers.players.values()].map((p) => p.anim) : []),
   remoteY: () => (remotePlayers ? [...remotePlayers.players.values()].map((p) => p.cur.y) : []),
 };
