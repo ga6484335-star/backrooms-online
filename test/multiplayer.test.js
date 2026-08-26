@@ -16,7 +16,7 @@ function connect(name) {
     ws.on('message', (raw) => {
       const m = JSON.parse(raw.toString());
       client.msgs.push(m);
-      if (m.t === 'hello') client.id = m.id;
+      if (m.t === 'hello') { client.id = m.id; client.token = m.token; }
       if (m.t === 'room') client.room = m;
       if (m.t === 'st') client.state = m;
     });
@@ -104,12 +104,48 @@ async function main() {
     assert(true, 'door/keypickup events sent without crash');
     console.log('  ✔ door/keypickup events accepted');
 
-    // 10. disconnect handling
+    // 10. connection drop -> rejoin with session token
+    assert(b.token, 'B received a session token');
+    const bId = b.id;
     const aMark = a.msgs.length;
-    b.ws.close();
+    b.ws.terminate(); // hard drop, like a mobile network cut
     await sleep(600);
     const gotA = a.msgs.slice(aMark);
-    assert(gotA.some((m) => m.t === 'peer' && !m.add && m.id === b.id), 'A notified of B leaving');
+    assert(gotA.some((m) => m.t === 'peer' && !m.add && m.id === bId), 'A notified of B dropping');
+
+    // B reconnects and rejoins with the same token
+    const b2 = await connect('BRAVO');
+    b2.ws.send(JSON.stringify({ t: 'rejoin', code: a.room.code, token: b.token }));
+    await sleep(400);
+    assert(b2.id === bId, 'rejoin keeps the same player id');
+    assert(b2.room && b2.room.rejoin === true, 'rejoin room payload flagged');
+    assert(b2.room.code === a.room.code, 'rejoined the same room');
+    assert(b2.room.doorStates && b2.room.doorStates['1,2,3'] === true,
+      'rejoin payload carries accumulated door states');
+    assert(a.msgs.slice(aMark).some((m) => m.t === 'peer' && m.add && m.player && m.player.id === bId),
+      'A sees B return');
+
+    // state sync still works after rejoin
+    b2.ws.send(JSON.stringify({ t: 'u', p: [9, 1.6, 9], r: [0.5, 0], a: 'run' }));
+    await sleep(400);
+    const stA2 = a.msgs.filter((m) => m.t === 'st').pop();
+    const rowB = stA2.list.find((r) => r[0] === bId);
+    assert(rowB && Math.abs(rowB[1] - 9) < 0.01, 'post-rejoin movement syncs');
+
+    // wrong token is rejected
+    const imp = await connect('IMPOSTOR');
+    imp.ws.send(JSON.stringify({ t: 'rejoin', code: a.room.code, token: 'deadbeefdeadbeefdeadbeef' }));
+    await sleep(300);
+    assert(imp.msgs.some((m) => m.t === 'err' && m.msg === 'SESSION EXPIRED'), 'bad token rejected');
+    imp.ws.close();
+
+    // 11. explicit leave removes immediately
+    const aMark2 = a.msgs.length;
+    b2.ws.send(JSON.stringify({ t: 'leave' }));
+    await sleep(400);
+    assert(a.msgs.slice(aMark2).some((m) => m.t === 'peer' && !m.add && m.id === bId),
+      'A notified of B leaving');
+    b2.ws.close();
 
     console.log('\nALL MULTIPLAYER TESTS PASSED ✔');
   } finally {

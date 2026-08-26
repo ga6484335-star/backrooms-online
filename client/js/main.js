@@ -53,6 +53,36 @@ let respawnT = 0;           // seconds until respawn allowed
 let spectateIdx = 0;
 let distTravelled = 0;      // metres walked this session (horror director)
 
+// ---------------------------------------------------------------------------
+// reconnection state
+const SESSION_KEY = 'backrooms-session';
+let reconnecting = false;
+let reconnectAttempt = 0;
+let reconnectTimer = null;
+
+function saveSession(code) {
+  try {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify({ code, token: net.token }));
+  } catch (e) { /* private mode */ }
+}
+function loadSession() {
+  try {
+    const s = JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null');
+    return s && s.code && s.token ? s : null;
+  } catch (e) { return null; }
+}
+function clearSession() {
+  try { sessionStorage.removeItem(SESSION_KEY); } catch (e) { /* ignore */ }
+}
+function showNetBanner(text) {
+  const b = E('net-banner');
+  if (b) { b.textContent = text; b.classList.remove('hidden'); }
+}
+function hideNetBanner() {
+  const b = E('net-banner');
+  if (b) b.classList.add('hidden');
+}
+
 const E = (id) => document.getElementById(id);
 
 // ---------------------------------------------------------------------------
@@ -119,19 +149,32 @@ async function connectThen(fn) {
 
 // ---------------------------------------------------------------------------
 // network handlers
-net.on('hello', (m) => { net.id = m.id; });
-net.on('err', (m) => { menu.showJoinError(m.msg); menu.setStatus(m.msg); });
+net.on('hello', (m) => { net.id = m.id; if (m.token) net.token = m.token; });
+net.on('err', (m) => {
+  if (reconnecting) { failReconnect(m.msg); return; }
+  clearSession();
+  menu.showJoinError(m.msg);
+  menu.setStatus(m.msg);
+});
 net.on('room', (m) => {
   net.room = m;
   net.players.clear();
   for (const p of m.players) net.players.set(p.id, p);
   isHost = m.host === net.id;
+  saveSession(m.code);
+  window.__seed = m.seed; // debug hook for tests
+  if (m.rejoin && gameState === 'playing') { resumeFromRejoin(m); return; }
+  if (m.state === 'playing') {
+    // joined (or page-refreshed) into a game already in progress
+    startGame(m.seed, m.level);
+    applyWorldReplay(m);
+    return;
+  }
   gameState = 'lobby';
   menu.showLobby();
   menu.updateLobby({ ...m, meId: net.id });
   audio.ensure();
   audio.resume();
-  window.__seed = m.seed; // debug hook for tests
 });
 net.on('peer', (m) => {
   if (m.add) {
@@ -207,12 +250,106 @@ net.on('ev', (m) => {
       if (events) events.fire(m.kind, player, m.data);
   }
 });
-net.on('close', () => {
-  if (gameState !== 'menu') {
-    leaveToMenu();
-    menu.setStatus('CONNECTION LOST');
-  }
+net.on('close', (intentional) => {
+  if (intentional || gameState === 'menu' || !net.room) return;
+  if (reconnecting) { scheduleReconnect(); return; } // attempt itself dropped
+  startReconnect();
 });
+
+// ---------------------------------------------------------------------------
+// auto-reconnect: keep the game alive across dropped connections
+function startReconnect() {
+  if (reconnecting) return;
+  reconnecting = true;
+  reconnectAttempt = 0;
+  showNetBanner('RECONNECTING…');
+  scheduleReconnect();
+}
+
+function scheduleReconnect() {
+  if (!reconnecting) return;
+  reconnectAttempt++;
+  showNetBanner(`RECONNECTING… (${reconnectAttempt})`);
+  const delay = Math.min(15000, 1000 * 2 ** (reconnectAttempt - 1));
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(tryReconnect, delay);
+}
+
+async function tryReconnect() {
+  const sess = loadSession();
+  if (!sess) { failReconnect('SESSION LOST'); return; }
+  try {
+    await net.connect();
+    net.rejoin(sess.code, sess.token);
+    // if neither 'room' nor 'err' arrives, the socket is half-dead: retry
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+      if (reconnecting) net.forceClose();
+    }, 8000);
+  } catch (e) {
+    if (reconnectAttempt >= 10) { failReconnect('CONNECTION LOST'); return; }
+    scheduleReconnect();
+  }
+}
+
+function failReconnect(reason) {
+  reconnecting = false;
+  clearTimeout(reconnectTimer);
+  hideNetBanner();
+  clearSession();
+  leaveToMenu();
+  menu.setStatus(`${reason || 'CONNECTION LOST'} — COULD NOT RECONNECT`);
+}
+
+// Reattach to the running game after a successful rejoin.
+function resumeFromRejoin(m) {
+  reconnecting = false;
+  clearTimeout(reconnectTimer);
+  hideNetBanner();
+  // resync remote avatars with the authoritative roster
+  for (const id of [...remotePlayers.players.keys()]) {
+    if (!net.players.has(id)) remotePlayers.remove(id);
+  }
+  for (const [id, p] of net.players) {
+    if (id !== net.id && !remotePlayers.players.has(id)) remotePlayers.add(id, p);
+  }
+  applyWorldReplay(m);
+  updatePlayersHud();
+  flashText('SIGNAL RESTORED');
+}
+
+// Replay world state the server kept for us (doors, morphs, dead lights, monsters).
+function applyWorldReplay(m) {
+  for (const [k, v] of Object.entries(m.doorStates || {})) {
+    doorToggles.set(k, v);
+    if (worldMgr) worldMgr.setDoorOpen(k, v);
+  }
+  for (const ev of m.events || []) {
+    if (!ev || !ev.kind) continue;
+    if (ev.kind === 'door' && ev.data) {
+      doorToggles.set(ev.data.key, ev.data.open);
+      if (worldMgr) worldMgr.setDoorOpen(ev.data.key, ev.data.open);
+    } else if (ev.kind === 'chunkmorph' && worldMgr) {
+      worldMgr.applyMorph(ev.data);
+    } else if (ev.kind === 'lightdie' && lightMgr) {
+      lightMgr.killFixture(ev.data.key);
+    } else if ((ev.kind === 'keypickup' || ev.kind === 'battpickup') && worldMgr && ev.data) {
+      worldMgr.removeInteractable(ev.data.id);
+    }
+  }
+  if (m.monsters && monsters && !isHost) {
+    monsters.applySnapshot(Object.values(m.monsters));
+  }
+}
+
+// Watchdog: a socket that goes silent (no 12 Hz state ticks) is dead even if
+// the OS hasn't noticed yet — force it closed so the reconnect flow starts.
+setInterval(() => {
+  if (net.connected && net.room && !reconnecting
+      && performance.now() - net.lastMsgAt > 20000) {
+    net.forceClose();
+  }
+}, 5000);
 
 // ---------------------------------------------------------------------------
 // game start
@@ -718,6 +855,10 @@ function loop() {
 // boot
 function leaveToMenu() {
   gameState = 'menu';
+  reconnecting = false;
+  clearTimeout(reconnectTimer);
+  hideNetBanner();
+  clearSession();
   net.leave();
   player.enabled = false;
   player.dead = false;
@@ -782,6 +923,16 @@ setTimeout(() => {
   f.style.transition = 'opacity 2s ease';
   f.classList.add('clear');
 }, 300);
+
+// resume a dropped session after a page refresh (mobile browsers kill tabs)
+(function resumeSessionOnLoad() {
+  const sess = loadSession();
+  if (!sess) return;
+  menu.setStatus('RESUMING SESSION…');
+  net.connect()
+    .then(() => net.rejoin(sess.code, sess.token))
+    .catch(() => { clearSession(); menu.setStatus('SIGNAL OK'); });
+})();
 
 // auto-detect touch changes (e.g. tablets)
 window.addEventListener('touchstart', () => {

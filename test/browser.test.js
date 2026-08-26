@@ -156,11 +156,14 @@ async function main() {
       await cdp.eval(`window.__dbg.teleport(${d.x + 1.5}, ${d.z + 1.5}, 0)`);
       const near = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.nearInteractable())`) || 'null');
       check(!!near, 'door in interact range after teleport');
-      const before = d.locked;
+      const before = (near && near.data && near.data.locked) || false;
       const hitType = await cdp.eval(`window.__dbg.interact()`);
       console.log('  [info] interact hit:', hitType);
       await sleep(200);
-      const after = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.doors().filter(dd => dd.key === '${d.key}')[0])`) || 'null');
+      // the interactor picks the *nearest* door, which may differ from d —
+      // verify against the door that was actually hit
+      const hitKey = near && near.type === 'door' && near.data ? `${near.data.cx},${near.data.cz},${near.data.dir}` : d.key;
+      const after = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.doors().filter(dd => dd.key === '${hitKey}')[0])`) || 'null');
       if (before) {
         // locked door must stay closed and report LOCKED
         check(after && after.open === false, 'locked door stayed closed without key');

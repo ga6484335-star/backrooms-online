@@ -10,6 +10,10 @@ const PORT = parseInt(process.env.PORT || '12000', 10);
 const ROOT = path.join(__dirname, '..');
 
 const app = express();
+app.set('trust proxy', true); // correct client IPs behind Render/Fly/nginx proxies
+try {
+  app.use(require('compression')()); // gzip static assets (three.js bundle is ~1.2 MB)
+} catch (e) { /* compression optional */ }
 // HTML/JS/CSS must always revalidate (ETag → cheap 304s) so deploys reach
 // existing sessions immediately; only the immutable three.js vendor bundle
 // gets a long cache lifetime.
@@ -64,7 +68,7 @@ wss.on('connection', (ws) => {
         if (room) break;
         room = roomManager.create();
         player = room.addPlayer(ws, msg.name);
-        ws.send(JSON.stringify({ t: 'hello', id: player.id }));
+        ws.send(JSON.stringify({ t: 'hello', id: player.id, token: player.token }));
         ws.send(JSON.stringify({
           t: 'room', code: room.code, seed: room.seed, level: room.level,
           state: room.state, host: room.hostId, players: room.roster(),
@@ -79,11 +83,31 @@ wss.on('connection', (ws) => {
         room = target;
         player = room.addPlayer(ws, msg.name);
         if (!player) { ws.send(JSON.stringify({ t: 'err', msg: 'ROOM IS FULL' })); room = null; break; }
-        ws.send(JSON.stringify({ t: 'hello', id: player.id }));
+        ws.send(JSON.stringify({ t: 'hello', id: player.id, token: player.token }));
         ws.send(JSON.stringify({
           t: 'room', code: room.code, seed: room.seed, level: room.level,
           state: room.state, host: room.hostId, players: room.roster(), events: room.eventLog,
           monsters: room.monsterState,
+          doorStates: Object.fromEntries(room.doorStates),
+        }));
+        room.broadcast({ t: 'peer', add: true, player: { id: player.id, name: player.name, color: player.color, host: player.id === room.hostId } }, player.id);
+        break;
+      }
+      case 'rejoin': {
+        if (room) break; // already in a room on this socket
+        const target = roomManager.get(msg.code);
+        if (!target) { ws.send(JSON.stringify({ t: 'err', msg: 'ROOM NOT FOUND' })); break; }
+        const re = target.reattach(ws, String(msg.token || ''));
+        if (!re) { ws.send(JSON.stringify({ t: 'err', msg: 'SESSION EXPIRED' })); break; }
+        room = target;
+        player = re;
+        ws.send(JSON.stringify({ t: 'hello', id: player.id, token: player.token, rejoin: true }));
+        ws.send(JSON.stringify({
+          t: 'room', code: room.code, seed: room.seed, level: room.level,
+          state: room.state, host: room.hostId, players: room.roster(), events: room.eventLog,
+          monsters: room.monsterState,
+          doorStates: Object.fromEntries(room.doorStates),
+          rejoin: true,
         }));
         room.broadcast({ t: 'peer', add: true, player: { id: player.id, name: player.name, color: player.color, host: player.id === room.hostId } }, player.id);
         break;
@@ -143,9 +167,15 @@ wss.on('connection', (ws) => {
     }
   });
 
-  ws.on('close', () => cleanup());
+  ws.on('close', () => {
+    if (!room || !player) return;
+    // Socket dropped: hide the avatar now but keep the slot for rejoin.
+    room.markDisconnected(player.id);
+    room.broadcast({ t: 'peer', add: false, id: player.id });
+    room = null; player = null;
+  });
 
-  function cleanup() {
+  function cleanup() { // explicit leave: remove immediately, no grace period
     if (!room || !player) return;
     room.relayEvent(player.id, 'peerleft', {});
     room.removePlayer(player.id);
@@ -172,6 +202,22 @@ const tick = setInterval(() => {
 }, 83);
 tick.unref();
 
+// Proxies (Render, Cloudflare, nginx) often idle-timeout at ~60s; keep ours above that.
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
+
 server.listen(PORT, () => {
   console.log(`[backrooms] server listening on http://0.0.0.0:${PORT}`);
 });
+
+// Graceful shutdown so hosts (Render/Fly/Docker) can roll deploys cleanly.
+function shutdown(sig) {
+  console.log(`[backrooms] ${sig} received, shutting down`);
+  clearInterval(hb);
+  clearInterval(tick);
+  for (const ws of wss.clients) { try { ws.close(1001, 'server restart'); } catch (e) {} }
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 3000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

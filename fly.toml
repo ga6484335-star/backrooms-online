@@ -1,0 +1,27 @@
+# Fly.io deploy config (alternative to Render) — `fly launch` uses this.
+app = "backrooms-online"
+primary_region = "fra"   # Frankfurt: good for both UK and Iran
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+
+[http_service]
+  internal_port = 12000
+  force_https = true
+  auto_stop_machines = false   # never sleep: rooms must stay reachable
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

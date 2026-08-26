@@ -1,6 +1,10 @@
 'use strict';
 
+const crypto = require('crypto');
+
 const MAX_PLAYERS = 8;
+// How long a dropped player's slot is kept so they can rejoin with their token.
+const REJOIN_GRACE_MS = parseInt(process.env.REJOIN_GRACE_MS || '90000', 10);
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no ambiguous chars
 const ROOM_TTL_IDLE = 1000 * 60 * 30;      // 30 min with no players
 const ROOM_TTL_LOBBY = 1000 * 60 * 60 * 3; // 3 h lobby lifetime max
@@ -33,6 +37,9 @@ class Room {
     const id = nextPlayerId++;
     const player = {
       id, ws,
+      token: crypto.randomBytes(12).toString('hex'),
+      disconnected: false,
+      dcTimer: null,
       name: (name || 'EXPLORER').toString().slice(0, 16).toUpperCase() || 'EXPLORER',
       pos: [0, 0, 0],
       rot: [0, 0],
@@ -48,7 +55,38 @@ class Room {
     return player;
   }
 
+  // Socket dropped: keep the slot for REJOIN_GRACE_MS so the player can return.
+  markDisconnected(id) {
+    const p = this.players.get(id);
+    if (!p || p.disconnected) return;
+    p.disconnected = true;
+    p.ws = null;
+    p.dcTimer = setTimeout(() => {
+      if (p.disconnected) {
+        this.relayEvent(id, 'peerleft', {});
+        this.removePlayer(id);
+        this.broadcast({ t: 'peer', add: false, id });
+      }
+    }, REJOIN_GRACE_MS);
+    if (p.dcTimer.unref) p.dcTimer.unref();
+  }
+
+  // Reattach a new socket to a previously disconnected player (same id/token).
+  reattach(ws, token) {
+    for (const p of this.players.values()) {
+      if (p.token === token && p.disconnected) {
+        p.ws = ws;
+        p.disconnected = false;
+        if (p.dcTimer) { clearTimeout(p.dcTimer); p.dcTimer = null; }
+        return p;
+      }
+    }
+    return null;
+  }
+
   removePlayer(id) {
+    const p = this.players.get(id);
+    if (p && p.dcTimer) clearTimeout(p.dcTimer);
     this.players.delete(id);
     if (this.hostId === id) {
       const next = this.players.keys().next();
@@ -152,4 +190,4 @@ class RoomManager {
   }
 }
 
-module.exports = { RoomManager, MAX_PLAYERS, sendSafe };
+module.exports = { RoomManager, MAX_PLAYERS, sendSafe, REJOIN_GRACE_MS };

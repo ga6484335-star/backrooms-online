@@ -1,0 +1,14 @@
+# Render Blueprint — one-click permanent deploy (free tier works)
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: backrooms-online
+    runtime: node
+    plan: free
+    region: frankfurt   # best compromise for EU (UK) + Middle East (Iran) latency
+    buildCommand: npm ci --omit=dev
+    startCommand: node server/index.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production

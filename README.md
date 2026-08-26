@@ -90,18 +90,60 @@ npm run test:all      # all of the above
 Browser tests need a Chromium binary at `/usr/bin/chromium` (or set
 `CHROME_PATH`).
 
-## Deployment
+## Deployment (permanent, production)
 
-The server is self-contained. Host it on any Node.js-capable platform:
+The server is self-contained: it serves the website AND the WebSocket
+multiplayer endpoint from one process, so a single host is enough. It never
+depends on OpenHands, your Mac, or any local terminal once deployed.
+
+### Option A — Render (recommended: free, no credit card, WebSocket support)
+
+1. Push this repository to GitHub.
+2. Go to <https://dashboard.render.com> → **New** → **Blueprint**.
+3. Point it at the repo. `render.yaml` is detected automatically:
+   Node runtime, Frankfurt region, health check on `/health`.
+4. Deploy. You get a permanent URL like `https://backrooms-online.onrender.com`.
+
+Free tier notes: the service sleeps after ~15 min of inactivity and takes
+~30 s to wake on the first visit — the in-game auto-reconnect handles this,
+but for an always-on room list upgrade to a paid plan.
+
+### Option B — Fly.io
 
 ```bash
-PORT=80 npm start
+fly launch        # detects fly.toml (Frankfurt, always-on, 512 MB)
+fly deploy
 ```
 
-Requirements: Node.js 18+, no external services. The WebSocket endpoint is on
-the same origin as the site, so a single domain/port is enough. For public
-hosting, put it behind a TLS-terminating reverse proxy (nginx, Caddy, etc.) —
-the client automatically uses `wss://` when the page is served over `https://`.
+### Option C — Any VPS with Docker
+
+```bash
+docker build -t backrooms .
+docker run -d -p 80:12000 --restart unless-stopped backrooms
+```
+
+Put it behind Caddy/nginx for TLS. WebSocket upgrade config for nginx:
+
+```nginx
+location /ws {
+    proxy_pass http://127.0.0.1:12000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 3600s;   # keep idle game sockets open
+}
+```
+
+### Network behaviour
+
+- HTTPS pages automatically use WSS; HTTP pages use WS. No config needed.
+- The client reconnects automatically with exponential backoff and rejoins
+  its room with a session token (slots survive a 90 s dropout).
+- A page refresh mid-game also resumes the session automatically.
+- No geographic blocking: any IP can connect. There are no region locks.
+- `/health` returns `{ok, rooms}` for uptime monitors (e.g. UptimeRobot).
+
+Requirements: Node.js 18+, no external services, no database.
 
 ## Controls
 

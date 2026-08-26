@@ -249,3 +249,23 @@ body {
   padding: 8px 16px;
   border: 1px solid #ff444433;
 }
+
+/* reconnect banner */
+#net-banner {
+  position: fixed;
+  top: 14%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  padding: 8px 22px;
+  font-family: 'Courier New', monospace;
+  font-size: 15px;
+  letter-spacing: 3px;
+  color: #ffb84d;
+  background: rgba(10, 8, 4, 0.72);
+  border: 1px solid rgba(255, 184, 77, 0.45);
+  text-shadow: 0 0 8px rgba(255, 184, 77, 0.6);
+  animation: netbanner-blink 1.2s steps(2) infinite;
+  pointer-events: none;
+}
+@keyframes netbanner-blink { 50% { opacity: 0.55; } }
