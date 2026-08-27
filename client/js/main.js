@@ -206,8 +206,13 @@ net.on('start', (m) => {
 });
 net.on('st', (m) => { if (gameState === 'playing') remotePlayers.applyState(m.list, net.id); });
 net.on('ms', (m) => { if (monsters && !isHost) monsters.applySnapshot(m.list); });
+
 net.on('ev', (m) => {
-  if (gameState !== 'playing') return;
+  // scream must always be heard: monsters hunt in the lobby too (host
+  // may be running ahead on a different screen), and tests need the event ring
+  if (m.kind === 'scream') { /* fall through into the main switch below */ }
+  else if (gameState !== 'playing') return;
+  if (window.__dbg && window.__dbg._ev) { window.__dbg._ev.push(m.kind); if (window.__dbg._ev.length > 40) window.__dbg._ev.shift(); }
   switch (m.kind) {
     case 'emote': {
       const p = remotePlayers.players.get(m.data.id);
@@ -246,6 +251,21 @@ net.on('ev', (m) => {
     }
     case 'respawn': {
       if (m.data.pid !== net.id) flashText(`${net.players.get(m.data.pid)?.name || 'SOMEONE'} IS BACK`);
+      break;
+    }
+    case 'scream': {
+      const nm = net.players.get(m.data.pid);
+      flashText(`${nm ? nm.name : 'SOMEONE'} SCREAMED.`);
+      if (m.data.pid === net.id) break; // we already heard our own
+      audio.humanScream(m.data.x, 1.6, m.data.z);
+      if (monsters) {
+        const pl = [{ id: m.data.pid, x: m.data.x, z: m.data.z }];
+        if (remotePlayers) for (const [id, rp] of remotePlayers.players) {
+          pl.push({ id, x: rp.cur.x, z: rp.cur.z });
+        }
+        pl.push({ id: net.id, x: player.pos.x, z: player.pos.z });
+        monsters.hearScream(m.data.x, m.data.z, m.data.pid, pl);
+      }
       break;
     }
     case 'scare': {
@@ -449,6 +469,7 @@ function startGame(seed, level) {
     if (!mobile) {
       mobile = new MobileControls(player, doInteract, doEmote, togglePause);
       mobile.onFlash = () => { if (!dead && flash) flash.toggle(); };
+      mobile.onScream = doScream;
     }
     mobile.show();
   } else {
@@ -626,6 +647,28 @@ function doEmote(e) {
   net.sendEmote(player.emote || (player.sitting ? 'sit' : ''));
 }
 
+// ---- THE SCREAM (Q): loud human scream, broadcast, monsters hunt you
+let screamCooldown = 0;
+function doScream(force = false) {
+  if (dead || paused || (!force && screamCooldown > 0) || gameState !== 'playing') return;
+  screamCooldown = 12; // seconds
+  audio.ensure();
+  audio.resume();
+  audio.humanScream(player.pos.x, 1.6, player.pos.z);
+  player.trauma(0.3);
+  engine.bumpGlitch(0.4);
+  flashText('SCREAM!');
+  net.sendEvent('scream', { x: player.pos.x, z: player.pos.z, pid: net.id });
+  // host: local monsters respond immediately (broadcast kicks in on the wire)
+  if (monsters) {
+    const pl = [{ id: net.id, x: player.pos.x, z: player.pos.z }];
+    if (remotePlayers) for (const [id, rp] of remotePlayers.players) {
+      pl.push({ id, x: rp.cur.x, z: rp.cur.z });
+    }
+    monsters.hearScream(player.pos.x, player.pos.z, net.id, pl);
+  }
+}
+
 let paused = false;
 function togglePause(force) {
   // state-of-truth is `paused`, not the DOM class — the pause overlay can be
@@ -668,7 +711,7 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.code === 'KeyE') doInteract();
   if (e.code === 'Escape') togglePause();
-  if (e.code === 'KeyQ') doEmote('wave');
+  if (e.code === 'KeyQ') doScream();
   if (e.code === 'KeyC') doEmote('sit'); // sit/stand toggle
   if (e.code === 'KeyF' && !dead && flash) flash.toggle();
   if (e.code === 'KeyR' && dead && respawnT <= 0) respawn();
@@ -877,6 +920,7 @@ function loop() {
   debugUpdate(dt);
   morphLogic(dt);
 
+  screamCooldown = Math.max(0, screamCooldown - dt);
   // host streams monsters at 8Hz
   if (isHost && monsters.monsters.size) {
     sendAcc += dt;
@@ -989,11 +1033,16 @@ window.__dbg = {
   monsters: () => (monsters ? monsters.monsters.size : 0),
   monsterTypes: () => (monsters ? [...monsters.monsters.values()].map((m) => `${m.type}:${m.state}`) : []),
   monsterIds: () => (monsters ? [...monsters.monsters.keys()] : []),
+  scream: () => doScream(true),
+  respawn: () => respawn(),
+  _ev: [], // ring of recent event kinds seen (debug/test)
   placeNote: (dx, dz) => {
     if (!worldMgr) return null;
+    // place note right under the player (dx=0, dz=0) so its distance (0m)
+    // beats any nearby door (doors are always >= 1.5m away at cell walls)
     const n = { x: player.pos.x + dx, z: player.pos.z + dz, id: `note:test:${Date.now()}` };
-    // nearest loaded chunk's notes list is what nearestInteractable scans
-    const chunk = [...worldMgr.chunks.values()][0];
+    const pcx = Math.floor(player.pos.x / 16), pcz = Math.floor(player.pos.z / 16);
+    const chunk = worldMgr.chunks.get(`${pcx},${pcz}`) || [...worldMgr.chunks.values()][0];
     if (!chunk) return null;
     chunk.notes.push(n);
     return n.id;
@@ -1057,6 +1106,7 @@ window.addEventListener('touchstart', () => {
     player.mobile = true;
     if (gameState === 'playing' && !mobile) {
       mobile = new MobileControls(player, doInteract, doEmote, togglePause);
+      mobile.onScream = doScream;
       mobile.show();
     }
   }

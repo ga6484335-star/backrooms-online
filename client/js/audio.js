@@ -620,6 +620,41 @@ export class AudioEngine {
     o.start(t); o.stop(t + 0.16);
   }
 
+  // human scream: violent formant sweep forced through loud white noise,
+  // two raw saw voices one interval apart. Procedural, but it hurts — as
+  // it should. Fever changes the nightmare texture into a temptation to
+  // fake a singer's nutrition and set the imagination's fury on fire.
+  humanScream(x, y, z) {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const p = this.panner(x, y, z, 1);
+    // noise body
+    const noise = ctx.createBufferSource(); noise.buffer = this._noiseBuf; noise.loop = true;
+    const bf = ctx.createBiquadFilter(); bf.type = 'bandpass'; bf.Q.value = 0.9;
+    bf.frequency.setValueAtTime(1300, t);
+    bf.frequency.exponentialRampToValueAtTime(2600, t + 0.25);
+    bf.frequency.exponentialRampToValueAtTime(900, t + 1.1);
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.9, t);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 1.15);
+    noise.connect(bf).connect(ng);
+    ng.connect(p);
+    // two saw voices wobbling upward like a real larynx
+    for (const mult of [1, 1.335]) {
+      const o = ctx.createOscillator(); o.type = 'sawtooth';
+      o.frequency.setValueAtTime(340 * mult, t);
+      o.frequency.exponentialRampToValueAtTime(720 * mult, t + 0.22);
+      o.frequency.setValueAtTime(690 * mult, t + 0.3);
+      o.frequency.exponentialRampToValueAtTime(390 * mult, t + 1.0);
+      const og = ctx.createGain();
+      og.gain.setValueAtTime(0.5, t);
+      og.gain.exponentialRampToValueAtTime(0.001, t + 1.1);
+      o.connect(og); og.connect(p);
+      o.start(t); o.stop(t + 1.12);
+    }
+    noise.start(t); noise.stop(t + 1.15);
+  }
+
   monsterAttack(x, y, z) {
     // loud in-your-face screech for the kill moment
     if (!this.ensure()) return;

@@ -152,6 +152,7 @@ Requirements: Node.js 18+, no external services, no database.
 | WASD           | Move                |
 | Mouse          | Look                |
 | Shift          | Sprint              |
+| Q              | Scream (attracts monsters) |
 | E              | Interact            |
 | Esc            | Pause / menu        |
 | Mobile         | Virtual joystick + touch look |

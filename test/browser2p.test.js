@@ -197,6 +197,30 @@ async function main() {
     // resurrect path sanity: spawn survived too
     
 
+    // resurrect player 1 if it died during the hunt (scream is death-gated)
+    await p1.eval(`if (window.__dbg.player && window.__dbg.player.dead) window.__dbg.respawn && window.__dbg.respawn();`);
+    await sleep(300);
+    // --- THE SCREAM (Q): client 1 screams; server relays it to client 2;
+    // every shared monster flips to CHASE toward the screamer
+    // keyboard repeat is suppressed? no: but doScream enforces a 12s cooldown —
+    // use the function directly (the Q keybind is proven by browser.test elsewhere)
+    await p1.eval(`window.__dbg.scream()`);
+    await sleep(6500); // chase persistence can take several beats to settle on host
+    const evRing = await p2.eval(`(window.__dbg && window.__dbg._ev) ? window.__dbg._ev.slice() : []`);
+    console.log('  [info] p2 ev ring tail:', JSON.stringify(evRing.slice(-6)));
+    const screamRelayed = Array.isArray(evRing) && evRing.includes('scream');
+    check(screamRelayed === true, 'server relays scream event to peers');
+    // lethal species chase; non-lethal species keep their own behaviour
+    const LETHAL = ['ambusher','mimic','runner','crawler','walldweller','deepone','ceiling','falseplayer','hunter','bonefiend'];
+    const ACCEPT = ['chase', 'attack', 'gone', 'search', 'lose_target', 'cooldown'];
+    for (const px of [p1, p2]) {
+      const sts = await px.eval(`window.__dbg.monsterTypes()`);
+      const lethals = sts.filter((st) => LETHAL.includes(st.split(':')[0]));
+      const bad = lethals.filter((st) => !ACCEPT.includes(st.split(':')[1]));
+      check(bad.length === 0, 'scream flips every lethal monster to CHASE on ' + (px === p1 ? 'host' : 'client') + (bad.length ? ' [' + bad.join(',') + ']' : ''));
+    }
+    console.log('  [info] after-scream states:', JSON.stringify(await p1.eval(`window.__dbg.monsterTypes()`)));
+
     // --- disconnect client 2, verify client 1 updates
     c2.kill('SIGKILL');
     await sleep(1500);

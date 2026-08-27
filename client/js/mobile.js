@@ -102,6 +102,11 @@ export class MobileControls {
       this.onInteract();
     }, { passive: false });
 
+    document.getElementById('mb-scream').addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      if (this.onScream) this.onScream();
+    }, { passive: false });
+
     document.getElementById('mb-emote').addEventListener('touchstart', (e) => {
       e.preventDefault();
       this.onEmote(this.emotes[this.emoteIdx % this.emotes.length]);

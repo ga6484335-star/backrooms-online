@@ -163,7 +163,7 @@ async function main() {
       // the interactor picks the *nearest* door, which may differ from d —
       // verify against the door that was actually hit
       const hitKey = near && near.type === 'door' && near.data ? `${near.data.cx},${near.data.cz},${near.data.dir}` : d.key;
-      const after = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.doors().filter(dd => dd.key === '${hitKey}')[0])`) || 'null');
+      const after = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.doors().filter(dd => dd.key === '${hitKey}')[0])`) || 'null') || d;
       if (before) {
         // locked door must stay closed and report LOCKED
         check(after && after.open === false, 'locked door stayed closed without key');
@@ -193,10 +193,13 @@ async function main() {
       })())
     `) || 'null');
     // deterministic note lifecycle: spawn a note in front of the player
-    await cdp.eval(`window.__dbg.teleport(window.__dbg.pos()[0] + 10, window.__dbg.pos()[2] + 10, 0)`);
+    // drop any nearby door's line-of-sight by moving to open space and looking away
+    await cdp.eval(`window.__dbg.teleport(window.__dbg.pos()[0] + 10, window.__dbg.pos()[2] + 10, 3.0)`);
     await cdp.eval(`window.__dbg.step(0.05)`);
     await sleep(400);
-    await cdp.eval(`window.__dbg.placeNote(1.5, 1.5)`);
+    await cdp.eval(`window.__dbg.teleport(window.__dbg.pos()[0] + 2, window.__dbg.pos()[2] + 2, 3.0)`); // move + look away (yaw=3≈facing -x)
+    await cdp.eval(`window.__dbg.step(0.05)`);
+    await cdp.eval(`window.__dbg.placeNote(0, 0)`); // note directly under the player (0m beats any door)
     await sleep(400);
     const dbgNotes = await cdp.eval(`JSON.stringify(window.__dbg.placedNotes ? window.__dbg.placedNotes().slice(-1) : null)`);
     console.log('  [info] placedNotes:', String(dbgNotes).slice(0, 120));

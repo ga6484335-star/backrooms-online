@@ -508,6 +508,8 @@ export class MonsterSystem {
       if ((m.lurchT % 1.15) > 0.42) { m.moving = false; return; }
       speed *= 1.9; // the burst covers the whole stride
     }
+    m.bonusSpeed = Math.max(0, (m.bonusSpeed || 0) - dt * (m.def.speed || 1) * 0.12);
+    speed = Math.min(speed + m.bonusSpeed, m.def.speed * 1.7);
     if (!m.path || m.pathI >= m.path.length || (m.repathT = (m.repathT || 0) - dt) <= 0) {
       const from = [Math.floor(m.x / CELL), Math.floor(m.z / CELL)];
       const to = [Math.floor(tx / CELL), Math.floor(tz / CELL)];
@@ -551,7 +553,24 @@ export class MonsterSystem {
     return false;
   }
 
-  // ---- generic lethal hunt cycle for aggressive species ----------------
+  // ---- THE SCREAM: every creature in the room hears a human scream, no
+  // hearing-range gates. It head-thinks, locks the screamer, and hunts.
+  hearScream(x, z, pid, players) {
+    const t = players.find((p) => p.id === pid);
+    if (!t) return;
+    for (const m of this.monsters.values()) {
+      if (m.scare) continue;          // director puppets don't join the hunt
+      if (m.private || !m.def) continue; // local hallucinations stay personal
+      m.target = { id: t.id, x: t.x, z: t.z };
+      m.lastSeen = [t.x, t.z];
+      m.state = 'chase';
+      m.stateT = 0;
+      m.bonusSpeed = m.def.speed * 0.75; // ~75% faster, clamped by moveToward
+      this.audio.monsterVoice(m.type, m.x, 1.6, m.z, 0.9);
+    }
+  }
+
+// ---- generic lethal hunt cycle for aggressive species ----------------
   // sense -> chase (BFS pathing) -> attack. When the prey vanishes, the
   // monster heads to the last known position and SWEEPS nearby corridors
   // instead of giving up. It only re-arms once the sweep finds nothing.
