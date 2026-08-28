@@ -852,6 +852,29 @@ function debugUpdate(dt) {
   debugEl.textContent = lines.join('\n');
 }
 
+let diagAccum = 0;
+function monsterDiagLogger(dt) {
+  if (!DEBUG) return;
+  diagAccum += dt;
+  if (diagAccum < 8) return;
+  diagAccum = 0;
+  if (!monsters || monsters.monsters.size === 0) {
+    console.log('[monsters] none spawned yet (encounters=%s, dist=%s, t=%ss)',
+      monsters.encounters,
+      distTravelled.toFixed(0),
+      ((performance.now() - startTime) / 1000).toFixed(0));
+    return;
+  }
+  for (const m of monsters.monsters.values()) {
+    const d = Math.hypot(m.x - player.pos.x, m.z - player.pos.z);
+    console.log('[monsters] #%d %s [%f,%f] state=%s d=%f target=%s vis=%s life=%s',
+      m.id, m.type, m.x, m.z, m.state, d,
+      m.target ? m.target.id : 'none',
+      (m.mesh.parent ? 'YES' : 'NO'),
+      m.life.toFixed(0));
+  }
+}
+
 // ---------------------------------------------------------------------------
 // main loop
 let last = performance.now();
@@ -918,6 +941,7 @@ function loop() {
   events.update(dt, player);
   if (scares && !dead) scares.update(dt, player, remotePlayers);
   debugUpdate(dt);
+  monsterDiagLogger(dt);
   morphLogic(dt);
 
   screamCooldown = Math.max(0, screamCooldown - dt);
@@ -1033,6 +1057,25 @@ window.__dbg = {
   monsters: () => (monsters ? monsters.monsters.size : 0),
   monsterTypes: () => (monsters ? [...monsters.monsters.values()].map((m) => `${m.type}:${m.state}`) : []),
   monsterIds: () => (monsters ? [...monsters.monsters.keys()] : []),
+  monsterDiag: () => {
+    if (!monsters) return null;
+    return [...monsters.monsters.values()].map((m) => {
+      let vis = 0, tot = 0;
+      m.mesh.traverse((o) => { if (o.isMesh) { tot++; if (o.visible) vis++; } });
+      const d = Math.hypot(m.x - player.pos.x, m.z - player.pos.z);
+      return {
+        id: m.id, type: m.type, state: m.state,
+        pos: [+m.x.toFixed(1), +(m.y || 0).toFixed(2), +m.z.toFixed(1)],
+        dist: +d.toFixed(1),
+        inScene: !!m.mesh.parent,
+        visible: vis > 0, meshCt: tot, private: !!m.private,
+
+        target: m.target ? m.target.id : null,
+        life: +m.life.toFixed(1), despawnDist: m.def.despawnDist,
+        hasLOS: monsters.hasLOS(player.pos.x, player.pos.z, m.x, m.z),
+      };
+    });
+  },
   scream: () => doScream(true),
   respawn: () => respawn(),
   _ev: [], // ring of recent event kinds seen (debug/test)
@@ -1061,7 +1104,12 @@ window.__dbg = {
     };
   },
   scareT: () => (scares && scares.active ? scares.active.type : null),
-  spawnMonster: (type, dx = 5, dz = 5) => (monsters ? monsters.spawnMonster(type, player.pos.x + dx, player.pos.z + dz).id : -1),
+  spawnMonster: (type, dx = 5, dz = 5) => {
+    if (!monsters) return -1;
+    const m = monsters.spawnMonster(type, player.pos.x + dx, player.pos.z + dz);
+    m.tolerantMove = true; // protected from despawn while too far from players
+    return m.id;
+  },
   doors: () => (worldMgr ? [...worldMgr.doorIndex.values()].map((d) => ({
     key: `${d.cx},${d.cz},${d.dir}`, x: d.x, z: d.z, locked: d.locked, open: d.open,
     rot: d.pivot ? d.pivot.rotation.y : null,

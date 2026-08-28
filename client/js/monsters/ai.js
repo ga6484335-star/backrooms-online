@@ -101,7 +101,7 @@ export class MonsterSystem {
           // guaranteed encounters: past ~100m the director WILL bring the
           // first one; afterwards the chance creeps up the longer it's quiet
           let guaranteed = false;
-          if (this.encounters === 0 && dist > 90) { chanceOf = 1; guaranteed = true; }
+          if (this.encounters === 0 && (dist > 90 || this.director.timePlayed > 35)) { chanceOf = 1; guaranteed = true; }
           else if (dist > 120 && this.encounterAgo > 55) chanceOf = Math.min(1, chanceOf + (this.encounterAgo - 55) / 80);
           const globalCap = 3 + playerCount;
           // first-encounter guarantee must not be eaten by a lingering idle
@@ -345,6 +345,18 @@ export class MonsterSystem {
     if (this.isHost()) this.hostSpawnLogic(dt, player, alivePlayers.slice(1));
 
     // private hallucination scheduling
+    // relocate far-away test-dbg spawns into a nearby corridor so they
+    // stay reachable instead of drifting beyond despawnDist mid-encounter
+    for (const m of [...this.monsters.values()]) {
+      if (m.private || !m.def) continue;
+      const pd = Math.hypot(m.x - ppos[0], m.z - ppos[2]);
+      if (pd > m.def.despawnDist * 0.6 && (m.stateT > 8 || m.tolerantMove !== undefined)) {
+        const cell = this.worldMgr.monstersSpawnCell(ppos[0], ppos[2]);
+        m.x = (cell[0] + 0.5) * CELL;
+        m.z = (cell[1] + 0.5) * CELL;
+        m.mesh.position.set(m.x, m.y || 0, m.z);
+      }
+    }
     this.hallucTimer -= dt;
     if (this.hallucTimer <= 0) {
       this.hallucTimer = 90 + Math.random() * 120;
@@ -383,7 +395,7 @@ export class MonsterSystem {
       this.updateVoice(m, dt, ppos);
       this.envInteraction(m, dt);
 
-      if (d > m.def.despawnDist || m.life > 600) remove.push(m.id);
+      if (!m.tolerantMove && (d > m.def.despawnDist || m.life > 600)) remove.push(m.id);
       if (m.state === 'gone') remove.push(m.id);
 
       if (d < 6 && this.onNearCallback) this.onNearCallback(m, d);
