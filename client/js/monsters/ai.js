@@ -57,8 +57,9 @@ export class MonsterSystem {
     this.getPlayers = null;
 
     // pacing state machine: quiet -> uneasy -> encounter -> cooldown -> quiet
+    // durations shrink as the game goes on — the Backrooms get hungrier
     this.pacing = 'quiet';
-    this.pacingT = 30 + Math.random() * 25;
+    this.pacingT = 12 + Math.random() * 10;
     this.dwellCell = '';
     this.dwellT = 0;
 
@@ -73,11 +74,11 @@ export class MonsterSystem {
 
   bind(getPlayers) { this.getPlayers = getPlayers; }
 
-  // a player died: force a quiet mourning period — horror needs rhythm
+  // a player died: brief mourning period, then the world starts hunting again
   notifyDeath() {
     this.director.deaths++;
     this.pacing = 'cooldown';
-    this.pacingT = 75 + Math.random() * 45;
+    this.pacingT = 25 + Math.random() * 25;
   }
 
   // ------------------------------------------------------------- spawning
@@ -93,10 +94,12 @@ export class MonsterSystem {
       case 'quiet':
         if (this.pacingT <= 0) {
           this.pacing = 'uneasy';
-          this.pacingT = 25 + Math.random() * 25;
+          // (playT hoisted above)
+          this.pacingT = playT < 90 ? 12 + Math.random() * 10 : playT < 240 ? 8 + Math.random() * 7 : 5 + Math.random() * 4;
         }
         break;
       case 'uneasy':
+        const playT = this.director.timePlayed || 0;
         if (this.pacingT <= 0) {
           const active = [...this.monsters.values()].filter((m) => !m.private);
           const playerCount = this.director.players || (1 + (players ? players.length : 0));
@@ -113,7 +116,9 @@ export class MonsterSystem {
           let guaranteed = false;
           if (this.encounters === 0 && (dist > 90 || this.director.timePlayed > 35)) { chanceOf = 1; guaranteed = true; }
           else if (dist > 120 && this.encounterAgo > 55) chanceOf = Math.min(1, chanceOf + (this.encounterAgo - 55) / 80);
-          const globalCap = 3 + playerCount;
+          // dynamic cap: more players and more time spent = more monsters
+          // (playT hoisted above)
+          const globalCap = Math.min(14, (playT < 90 ? 4 : playT < 240 ? 5 : playT < 420 ? 7 : 9) + playerCount);
           // first-encounter guarantee must not be eaten by a lingering idle
           // silhouette: dormant mood species don't count against the cap there
           const blockers = guaranteed
@@ -160,19 +165,22 @@ export class MonsterSystem {
             }
           }
           this.pacing = 'cooldown';
-          this.pacingT = 35 + Math.random() * 45;
+          // (playT hoisted above)
+          this.pacingT = playT < 90 ? 14 + Math.random() * 16 : playT < 240 ? 9 + Math.random() * 11 : 6 + Math.random() * 7;
         }
         break;
       case 'encounter':
         if (this.pacingT <= 0 || ![...this.monsters.values()].some((m) => !m.private)) {
           this.pacing = 'cooldown';
-          this.pacingT = 50 + Math.random() * 60;
+          // (playT hoisted above)
+          this.pacingT = playT < 90 ? 14 + Math.random() * 16 : playT < 240 ? 9 + Math.random() * 11 : 6 + Math.random() * 7;
         }
         break;
       case 'cooldown':
         if (this.pacingT <= 0) {
           this.pacing = 'quiet';
-          this.pacingT = 35 + Math.random() * 35;
+          // (playT hoisted above)
+          this.pacingT = playT < 90 ? 12 + Math.random() * 10 : playT < 240 ? 8 + Math.random() * 7 : 5 + Math.random() * 4;
         }
         break;
     }
