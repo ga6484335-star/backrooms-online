@@ -36,6 +36,7 @@
       <input id="name-input" maxlength="16" placeholder="YOUR NAME" autocomplete="off" spellcheck="false">
       <button id="btn-create" class="mbtn">CREATE ROOM</button>
       <button id="btn-join" class="mbtn">JOIN ROOM</button>
+      <button id="btn-monsters" class="mbtn">MONSTERS</button>
       <button id="btn-settings" class="mbtn">SETTINGS</button>
     </div>
     <div class="menu-foot">
@@ -55,6 +56,16 @@
       <button id="btn-join-back" class="mbtn ghost">BACK</button>
     </div>
     <div id="join-error" class="error"></div>
+  </div>
+</div>
+
+<!-- ======================= MONSTERS ======================= -->
+<div id="monsters-panel" class="screen hidden">
+  <div class="panel" style="max-width:860px; max-height:92vh; overflow-y:auto;">
+    <h2>MONSTERS</h2>
+    <div class="panel-sub">KNOWN SPECIMENS — DO NOT APPROACH</div>
+    <div id="monster-grid"></div>
+    <div class="panel-row"><button id="btn-monsters-back" class="mbtn ghost">BACK</button></div>
   </div>
 </div>
 

@@ -283,3 +283,30 @@ body {
   pointer-events: none;
 }
 @keyframes netbanner-blink { 50% { opacity: 0.55; } }
+
+/* monsters encyclopedia */
+#monster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+.monster-card {
+  background: rgba(18, 14, 8, 0.6);
+  border: 1px solid rgba(200, 180, 120, 0.15);
+  padding: 10px;
+  font-family: 'Courier New', monospace;
+}
+.monster-card canvas {
+  display: block;
+  width: 100%;
+  height: 120px;
+  background: #0a0804;
+  margin-bottom: 8px;
+}
+.monster-card .mc-name { color: #c9b98a; font-size: 12px; letter-spacing: 2px; }
+.monster-card .mc-tag  { font-size: 10px; color: #8f8468; letter-spacing: 1px; margin: 2px 0; }
+.monster-card .mc-desc { font-size: 10px; color: #a89a70; line-height: 1.35; }
+.monster-card .mc-danger { font-size: 10px; color: #c45c4a; margin-top: 4px; letter-spacing: 1px; }
+.monster-card.unstoppable { border-color: rgba(255, 60, 60, 0.35); }
+.monster-card.unstoppable .mc-danger { color: #ff4a3a; font-weight: bold; }

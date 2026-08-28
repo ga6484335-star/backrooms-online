@@ -36,7 +36,7 @@ for (const [type, def] of Object.entries(MONSTER_TYPES)) {
   const limbs = g.userData.limbs || [];
   // runner keeps only its powerful legs in u.limbs (arms are glued to the
   // chest by design); deepone is armless too. everyone else animates 4+.
-  if (!['shadow', 'mimic', 'siren', 'runner', 'deepone'].includes(type)) {
+  if (!['shadow', 'mimic', 'siren', 'runner', 'deepone', 'leech', 'spitter', 'worm'].includes(type)) {
     check(limbs.length >= 4, `${type}: has ${limbs.length} animated limbs`);
   }
   // materials are real three materials with sane colors (never fully transparent)

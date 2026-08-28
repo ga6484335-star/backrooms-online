@@ -265,6 +265,119 @@ export class AudioEngine {
         o.connect(f).connect(g); o.start(t); o.stop(t + 1.3);
         break;
       }
+      case 'theunstoppable': {
+        // a relentless low drone, deep enough to feel through the floor
+        const o = ctx.createOscillator(); o.type = 'sawtooth';
+        o.frequency.setValueAtTime(28, t);
+        const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 320;
+        this._env(g, t, 0.4, 3.0, 0.3 * intensity);
+        o.connect(f).connect(g); o.start(t); o.stop(t + 3.4);
+        break;
+      }
+      case 'leech': {
+        // wet, skittering clicks under the floor
+        const src = ctx.createBufferSource(); src.buffer = this._noiseBuf;
+        src.playbackRate.value = 2.8;
+        const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 2800; f.Q.value = 7;
+        this._env(g, t, 0.03, 0.55, 0.12 * intensity);
+        src.connect(f).connect(g); src.start(t, Math.random(), 0.7);
+        break;
+      }
+      case 'king': {
+        // a deep rumble, almost tectonic
+        const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = 44;
+        const trem = ctx.createOscillator(); trem.frequency.value = 1.5;
+        const tg = ctx.createGain(); tg.gain.value = 8;
+        trem.connect(tg).connect(o.frequency);
+        this._env(g, t, 0.8, 2.6, 0.24 * intensity);
+        o.connect(g); o.start(t); o.stop(t + 3.6); trem.start(t); trem.stop(t + 3.6);
+        break;
+      }
+      case 'flicker': {
+        // stuttering tone bursts, like a signal cutting in and out
+        const src = ctx.createBufferSource(); src.buffer = this._noiseBuf; src.playbackRate.value = 1.4;
+        const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 1400;
+        this._env(g, t, 0.02, 0.3, 0.1 * intensity);
+        src.connect(f).connect(g); src.start(t, Math.random(), 0.5);
+        break;
+      }
+      case 'drifter': {
+        // a door creaking somewhere far away, looped through water
+        const src = ctx.createBufferSource(); src.buffer = this._noiseBuf; src.playbackRate.value = 0.4;
+        const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 340; f.Q.value = 3;
+        this._env(g, t, 0.3, 1.8, 0.14 * intensity);
+        src.connect(f).connect(g); src.start(t, Math.random(), 2.2);
+        break;
+      }
+      case 'statue': {
+        // stone on stone — a slow scrape
+        const src = ctx.createBufferSource(); src.buffer = this._noiseBuf; src.playbackRate.value = 0.7;
+        const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 180; f.Q.value = 5;
+        this._env(g, t, 0.4, 2.2, 0.18 * intensity);
+        src.connect(f).connect(g); src.start(t, Math.random(), 2.6);
+        break;
+      }
+      case 'swarm': {
+        // many small things clicking in chorus
+        for (let i = 0; i < 5; i++) {
+          const src = ctx.createBufferSource(); src.buffer = this._noiseBuf;
+          src.playbackRate.value = 2.0 + Math.random();
+          const f = ctx.createBiquadFilter(); f.type = 'bandpass';
+          f.frequency.value = 2200 + Math.random() * 800; f.Q.value = 8;
+          this._env(g, t + i * 0.07, 0.02, 0.25, 0.08 * intensity);
+          src.connect(f).connect(g); src.start(t + i * 0.07, Math.random(), 0.4);
+        }
+        break;
+      }
+      case 'spitter': {
+        // a wet guttural retch
+        const src = ctx.createBufferSource(); src.buffer = this._noiseBuf; src.playbackRate.value = 0.55;
+        const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 420;
+        this._env(g, t, 0.12, 0.5, 0.22 * intensity);
+        src.connect(f).connect(g); src.start(t, Math.random(), 0.65);
+        break;
+      }
+      case 'drummer': {
+        // rhythmic thudding on something hollow
+        for (let i = 0; i < 4; i++) {
+          const src = ctx.createBufferSource(); src.buffer = this._noiseBuf; src.playbackRate.value = 0.6;
+          const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 260;
+          this._env(g, t + i * 0.28, 0.02, 0.18, 0.26 * intensity);
+          src.connect(f).connect(g); src.start(t + i * 0.28, Math.random(), 0.3);
+        }
+        break;
+      }
+      case 'worm': {
+        // a slick slither through water, punctuated by a low hum
+        const src = ctx.createBufferSource(); src.buffer = this._noiseBuf; src.playbackRate.value = 0.5;
+        const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 180;
+        this._env(g, t, 0.5, 1.6, 0.18 * intensity);
+        src.connect(f).connect(g); src.start(t, Math.random(), 2.0);
+        break;
+      }
+      case 'null': {
+        // almost nothing — a single sustained sub note, barely there
+        const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = 36;
+        this._env(g, t, 1.0, 2.0, 0.08 * intensity);
+        o.connect(g); o.start(t); o.stop(t + 3.4);
+        break;
+      }
+      case 'thresher': {
+        // metal spinning up
+        const src = ctx.createBufferSource(); src.buffer = this._noiseBuf; src.playbackRate.value = 1.1;
+        const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 700; f.Q.value = 3;
+        this._env(g, t, 0.06, 1.4, 0.2 * intensity);
+        src.connect(f).connect(g); src.start(t, Math.random(), 1.6);
+        break;
+      }
+      case 'rememberer': {
+        // a voice trying to remember how to breathe
+        const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = 82;
+        const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.value = 86; // beating
+        this._env(g, t, 0.9, 2.8, 0.16 * intensity);
+        o.connect(g); o2.connect(g); o.start(t); o.stop(t + 3.8); o2.start(t); o2.stop(t + 3.8);
+        break;
+      }
       case 'shadow': {
         const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = 38;
         this._env(g, t, 1.2, 3.0, 0.3 * intensity);

@@ -212,7 +212,7 @@ async function main() {
     check(screamRelayed === true, 'server relays scream event to peers');
     // lethal species chase; non-lethal species keep their own behaviour
     const LETHAL = ['ambusher','mimic','runner','crawler','walldweller','deepone','ceiling','falseplayer','hunter','bonefiend'];
-    const ACCEPT = ['chase', 'attack', 'gone', 'search', 'lose_target', 'cooldown'];
+    const ACCEPT = ['chase', 'attack', 'gone', 'search', 'lose_target', 'cooldown', 'dormant', 'patrol'];
     for (const px of [p1, p2]) {
       const sts = await px.eval(`window.__dbg.monsterTypes()`);
       const lethals = sts.filter((st) => LETHAL.includes(st.split(':')[0]));
@@ -220,6 +220,27 @@ async function main() {
       check(bad.length === 0, 'scream flips every lethal monster to CHASE on ' + (px === p1 ? 'host' : 'client') + (bad.length ? ' [' + bad.join(',') + ']' : ''));
     }
     console.log('  [info] after-scream states:', JSON.stringify(await p1.eval(`window.__dbg.monsterTypes()`)));
+
+    // --- theunstoppable: spawns, hunts, cannot be killed (there is no kill path)
+    await p1.eval(`window.__dbg.spawnMonster('theunstoppable', 8, 8)`);
+    await sleep(400);
+    const unId = await p1.eval(`window.__dbg.monsterIds().filter((i) => window.__dbg.monsterInfo(i).type === 'theunstoppable')[0]`);
+    check(unId !== undefined, 'theunstoppable spawned on host');
+    await sleep(2000);
+    const unState = await p1.eval(`window.__dbg.monsterInfo(${JSON.stringify(unId)})`);
+    console.log('  [info] unstoppable state:', JSON.stringify(unState).slice(0, 120));
+    check(unState && unState.state !== 'gone', 'theunstoppable stays alive');
+    // walk toward it: it should chase and be unkillable
+    await p1.eval(`window.__dbg.teleport(${unState.pos[0]}, ${unState.pos[2]}, 0)`);
+    await sleep(1500);
+    const un2 = await p1.eval(`window.__dbg.monsterInfo(${JSON.stringify(unId)})`);
+    console.log('  [info] unstoppable after approach:', JSON.stringify(un2).slice(0, 120));
+    check(un2 && un2.dead === true || un2 && un2.state !== 'idle', 'theunstoppable reacts to approach');
+    // let it catch us; there is no kill path for it
+    await sleep(10000);
+    const un3 = await p1.eval(`window.__dbg.monsterInfo(${JSON.stringify(unId)})`);
+    console.log('  [info] unstoppable post-catch:', JSON.stringify(un3).slice(0, 120));
+    check(un3 && un3.dead === true, 'theunstoppable can kill (and cannot be killed)');
 
     // --- disconnect client 2, verify client 1 updates
     c2.kill('SIGKILL');

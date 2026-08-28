@@ -10,20 +10,30 @@ import { CELL, bfsPath } from '../worldgen.js';
 import { buildMonster, MONSTER_TYPES } from './defs.js';
 
 export const TYPE_IDS = ['watcher', 'stalker', 'hunter', 'ambusher', 'mimic', 'shadow', 'runner', 'crawler', 'siren',
-  'tallone', 'hollow', 'bonefiend', 'walldweller', 'deepone', 'ceiling', 'falseplayer'];
+  'tallone', 'hollow', 'bonefiend', 'walldweller', 'deepone', 'ceiling', 'falseplayer',
+  'theunstoppable', 'leech', 'king', 'flicker', 'drifter', 'statue', 'swarm', 'spitter',
+  'drummer', 'worm', 'null', 'thresher', 'rememberer'];
 
 // which monsters a level can produce (duplicates = weight)
 const LEVEL_POOLS = [
-  ['watcher', 'watcher', 'tallone', 'stalker', 'hollow', 'mimic', 'siren', 'falseplayer'],
-  ['stalker', 'hunter', 'ambusher', 'crawler', 'walldweller', 'walldweller', 'bonefiend', 'hollow'],
-  ['hunter', 'ambusher', 'ambusher', 'crawler', 'runner', 'bonefiend', 'ceiling', 'walldweller', 'hollow'],
-  ['deepone', 'deepone', 'siren', 'watcher', 'tallone', 'ambusher', 'ceiling'],
-  ['stalker', 'stalker', 'mimic', 'mimic', 'hunter', 'falseplayer', 'walldweller', 'hollow', 'ceiling'],
-  ['watcher', 'tallone', 'stalker', 'mimic', 'hunter', 'siren', 'runner', 'falseplayer', 'ceiling', 'bonefiend'],
+  ['watcher', 'watcher', 'tallone', 'stalker', 'hollow', 'mimic', 'siren', 'falseplayer',
+    'drifter', 'statue', 'swarm', 'drummer', 'rememberer'],
+  ['stalker', 'hunter', 'ambusher', 'crawler', 'walldweller', 'walldweller', 'bonefiend', 'hollow',
+    'flicker', 'statue', 'swarm', 'drummer', 'theunstoppable'],
+  ['hunter', 'ambusher', 'ambusher', 'crawler', 'runner', 'bonefiend', 'ceiling', 'walldweller', 'hollow',
+    'flicker', 'thresher', 'king', 'theunstoppable'],
+  ['deepone', 'deepone', 'worm', 'siren', 'watcher', 'tallone', 'ambusher', 'ceiling',
+    'leech', 'null', 'spitter'],
+  ['stalker', 'stalker', 'mimic', 'mimic', 'hunter', 'falseplayer', 'walldweller', 'hollow', 'ceiling',
+    'flicker', 'statue', 'drifter', 'rememberer', 'king', 'theunstoppable'],
+  ['watcher', 'tallone', 'stalker', 'mimic', 'hunter', 'siren', 'runner', 'falseplayer', 'ceiling', 'bonefiend',
+    'drifter', 'statue', 'swarm', 'drummer', 'null', 'thresher', 'rememberer', 'theunstoppable'],
 ];
 // hard caps so the world never fills with monsters
 const CAPS = { watcher: 1, stalker: 1, hunter: 1, ambusher: 2, mimic: 2, runner: 1, crawler: 2, siren: 1,
-  tallone: 1, hollow: 3, bonefiend: 1, walldweller: 2, deepone: 2, ceiling: 2, falseplayer: 1 };
+  tallone: 1, hollow: 3, bonefiend: 1, walldweller: 2, deepone: 2, ceiling: 2, falseplayer: 1,
+  theunstoppable: 1, leech: 2, king: 1, flicker: 2, drifter: 2, statue: 2, swarm: 3, spitter: 2,
+  drummer: 2, worm: 2, null: 1, thresher: 1, rememberer: 1 };
 
 const HEAR_WALK = 8, HEAR_RUN = 24;
 
@@ -503,6 +513,19 @@ export class MonsterSystem {
       case 'deepone': this.aiDeepone(m, dt, det); break;
       case 'ceiling': this.aiCeiling(m, dt, det); break;
       case 'falseplayer': this.aiFalseplayer(m, dt, det); break;
+      case 'theunstoppable': this.aiUnstoppable(m, dt, det); break;
+      case 'leech': this.aiLeech(m, dt, det); break;
+      case 'king': this.aiKing(m, dt, det); break;
+      case 'flicker': this.aiFlicker(m, dt, det); break;
+      case 'drifter': this.aiDrifter(m, dt, det); break;
+      case 'statue': this.aiStatue(m, dt, det); break;
+      case 'swarm': this.aiSwarm(m, dt, det); break;
+      case 'spitter': this.aiSpitter(m, dt, det); break;
+      case 'drummer': this.aiDrummer(m, dt, det); break;
+      case 'worm': this.aiWorm(m, dt, det); break;
+      case 'null': this.aiNull(m, dt, det); break;
+      case 'thresher': this.aiThresher(m, dt, det); break;
+      case 'rememberer': this.aiRememberer(m, dt, det); break;
     }
   }
 
@@ -850,6 +873,332 @@ export class MonsterSystem {
     } else {
       m.moving = false; // absolutely still while watched
     }
+  }
+
+  // ---- THE UNSTOPPABLE: cannot be defeated, slowed, or stopped.
+  // No combat solution exists. Run.
+  aiUnstoppable(m, dt, det) {
+    if (det) {
+      m.target = det.player;
+      m.lastSeen = [det.player.x, det.player.z];
+      this.setState(m, 'chase');
+      this.audio.monsterVoice('theunstoppable', m.x, 1.7, m.z, 1);
+      // faster than every player; if it can see or hear you it keeps coming
+      this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
+      if (det.nd < m.def.attackRange) {
+        this.setState(m, 'attack');
+        this.audio.monsterAttack(m.x, 1.5, m.z);
+        if (this.onCaught) this.onCaught(m, det.player);
+        this.setState(m, 'cooldown');
+        return;
+      }
+      return;
+    }
+    // no target: sweep the last known position, then resume patrolling
+    if (m.lastSeen) {
+      this.setState(m, 'search');
+      if (!m.searchSpot || Math.hypot(m.searchSpot[0] - m.x, m.searchSpot[1] - m.z) < 1.2) {
+        const a = Math.random() * Math.PI * 2;
+        m.searchSpot = [
+          m.lastSeen[0] + Math.cos(a) * (2 + Math.random() * 5),
+          m.lastSeen[1] + Math.sin(a) * (2 + Math.random() * 5),
+        ];
+      }
+      this.moveToward(m, m.searchSpot[0], m.searchSpot[1], m.def.speed * 0.8, dt);
+      return;
+    }
+    this.setState(m, 'patrol');
+    this.wander(m, dt, 1.1);
+  }
+
+  // ---- THE LEECH: low-profile crawler, fast, short lethal lunge.
+  aiLeech(m, dt, det) {
+    if (det) {
+      m.lastSeen = [det.player.x, det.player.z];
+      this.setState(m, 'chase');
+      this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
+      if (det.nd < m.def.attackRange) {
+        this.setState(m, 'attack');
+        this.audio.monsterAttack(m.x, 0.6, m.z);
+        if (this.onCaught) this.onCaught(m, det.player);
+        this.setState(m, 'cooldown');
+        return;
+      }
+      return;
+    }
+    if (m.lastSeen) {
+      this.setState(m, 'search');
+      this.wander(m, dt, 1.2);
+      return;
+    }
+    this.setState(m, 'patrol');
+    this.wander(m, dt, 0.8);
+  }
+
+  // ---- THE KING: slow, towering, hears little but sees far.
+  aiKing(m, dt, det) {
+    if (det) {
+      m.lastSeen = [det.player.x, det.player.z];
+      this.setState(m, 'chase');
+      this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
+      if (det.nd < m.def.attackRange) {
+        this.setState(m, 'attack');
+        this.audio.monsterAttack(m.x, 1.8, m.z);
+        if (this.onCaught) this.onCaught(m, det.player);
+        this.setState(m, 'cooldown');
+        return;
+      }
+      return;
+    }
+    if (m.lastSeen) {
+      this.setState(m, 'search');
+      this.wander(m, dt, 0.9);
+      return;
+    }
+    this.setState(m, 'patrol');
+    this.wander(m, dt, 0.6);
+  }
+
+  // ---- THE FLICKER: teleports a step whenever it would be observed.
+  aiFlicker(m, dt, det) {
+    if (det) {
+      m.lastSeen = [det.player.x, det.player.z];
+      this.setState(m, 'chase');
+      // blink-step: closes distance in discrete jumps instead of gliding
+      if (!m.blinkT || m.blinkT <= 0) {
+        m.blinkT = 0.3;
+        m.x = det.player.x - (det.player.x - m.x) * 0.85;
+        m.z = det.player.z - (det.player.z - m.z) * 0.85;
+      } else m.blinkT -= dt;
+      if (det.nd < m.def.attackRange) {
+        this.setState(m, 'attack');
+        this.audio.monsterAttack(m.x, 1.4, m.z);
+        if (this.onCaught) this.onCaught(m, det.player);
+        this.setState(m, 'cooldown');
+        return;
+      }
+      return;
+    }
+    if (m.lastSeen) {
+      this.setState(m, 'search');
+      this.wander(m, dt, 1.0);
+      return;
+    }
+    this.setState(m, 'patrol');
+    this.wander(m, dt, 0.8);
+  }
+
+  // ---- THE DRIFTER: only ever faces sideways; slides when unobserved.
+  aiDrifter(m, dt, det) {
+    if (det) {
+      m.lastSeen = [det.player.x, det.player.z];
+      this.setState(m, 'chase');
+      this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
+      if (det.nd < m.def.attackRange) {
+        this.setState(m, 'attack');
+        this.audio.monsterAttack(m.x, 1.3, m.z);
+        if (this.onCaught) this.onCaught(m, det.player);
+        this.setState(m, 'cooldown');
+        return;
+      }
+      return;
+    }
+    if (m.lastSeen) {
+      this.setState(m, 'search');
+      this.wander(m, dt, 1.1);
+      return;
+    }
+    this.setState(m, 'patrol');
+    this.wander(m, dt, 0.7);
+  }
+
+  // ---- THE STATUE: moves only when unobserved. Freezes in the beam.
+  aiStatue(m, dt, det) {
+    if (det) {
+      m.lastSeen = [det.player.x, det.player.z];
+      this.setState(m, 'chase');
+      this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
+      if (det.nd < m.def.attackRange) {
+        this.setState(m, 'attack');
+        this.audio.monsterAttack(m.x, 1.5, m.z);
+        if (this.onCaught) this.onCaught(m, det.player);
+        this.setState(m, 'cooldown');
+        return;
+      }
+      return;
+    }
+    if (m.lastSeen) {
+      this.setState(m, 'search');
+      this.wander(m, dt, 1.0);
+      return;
+    }
+    this.setState(m, 'patrol');
+    this.wander(m, dt, 0.8);
+  }
+
+  // ---- THE SWARM: fast pack hunter, many small bodies piling into light.
+  aiSwarm(m, dt, det) {
+    if (det) {
+      m.lastSeen = [det.player.x, det.player.z];
+      this.setState(m, 'chase');
+      this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
+      if (det.nd < m.def.attackRange) {
+        this.setState(m, 'attack');
+        this.audio.monsterAttack(m.x, 0.5, m.z);
+        if (this.onCaught) this.onCaught(m, det.player);
+        this.setState(m, 'cooldown');
+        return;
+      }
+      return;
+    }
+    if (m.lastSeen) {
+      this.setState(m, 'search');
+      this.wander(m, dt, 1.4);
+      return;
+    }
+    this.setState(m, 'patrol');
+    this.wander(m, dt, 1.2);
+  }
+
+  // ---- THE SPITTER: does not walk; it waits at a doorway and spits.
+  aiSpitter(m, dt, det) {
+    if (det && det.nd < m.def.attackRange) {
+      m.lastSeen = [det.player.x, det.player.z];
+      this.setState(m, 'chase');
+      // it lunges toward you, but it doesn't run far — it waits at the door
+      this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
+      if (det.nd < 1.0) {
+        this.setState(m, 'attack');
+        this.audio.monsterAttack(m.x, 1.4, m.z);
+        if (this.onCaught) this.onCaught(m, det.player);
+        this.setState(m, 'cooldown');
+        return;
+      }
+      return;
+    }
+    this.setState(m, 'dormant');
+    m.moving = false;
+  }
+
+  // ---- THE DRUMMER: blind. hunts by sound; light enrages it.
+  aiDrummer(m, dt, det) {
+    if (det) {
+      m.lastSeen = [det.player.x, det.player.z];
+      this.setState(m, 'chase');
+      this.moveToward(m, det.player.x, det.player.z, m.def.speed * (m.lit ? 1.3 : 1), dt);
+      if (det.nd < m.def.attackRange) {
+        this.setState(m, 'attack');
+        this.audio.monsterAttack(m.x, 1.6, m.z);
+        if (this.onCaught) this.onCaught(m, det.player);
+        this.setState(m, 'cooldown');
+        return;
+      }
+      return;
+    }
+    if (m.lastSeen) {
+      this.setState(m, 'search');
+      this.wander(m, dt, 1.1);
+      return;
+    }
+    this.setState(m, 'patrol');
+    this.wander(m, dt, 0.9);
+  }
+
+  // ---- THE WORM: flooded levels only; moves through water like it isn't there.
+  aiWorm(m, dt, det) {
+    if (det) {
+      m.lastSeen = [det.player.x, det.player.z];
+      this.setState(m, 'chase');
+      this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
+      if (det.nd < m.def.attackRange) {
+        this.setState(m, 'attack');
+        this.audio.monsterAttack(m.x, 1.5, m.z);
+        if (this.onCaught) this.onCaught(m, det.player);
+        this.setState(m, 'cooldown');
+        return;
+      }
+      return;
+    }
+    if (m.lastSeen) {
+      this.setState(m, 'search');
+      this.wander(m, dt, 1.3);
+      return;
+    }
+    this.setState(m, 'patrol');
+    this.wander(m, dt, 0.8);
+  }
+
+  // ---- THE NULL: no voice, no footsteps. stands where you were.
+  aiNull(m, dt, det) {
+    if (det) {
+      m.lastSeen = [det.player.x, det.player.z];
+      this.setState(m, 'chase');
+      this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
+      if (det.nd < m.def.attackRange) {
+        this.setState(m, 'attack');
+        this.audio.monsterAttack(m.x, 1.4, m.z);
+        if (this.onCaught) this.onCaught(m, det.player);
+        this.setState(m, 'cooldown');
+        return;
+      }
+      return;
+    }
+    if (m.lastSeen) {
+      this.setState(m, 'search');
+      this.wander(m, dt, 1.0);
+      return;
+    }
+    this.setState(m, 'patrol');
+    this.wander(m, dt, 0.8);
+  }
+
+  // ---- THE THRESHER: blade-armed; cuts through the corridor itself.
+  aiThresher(m, dt, det) {
+    if (det) {
+      m.lastSeen = [det.player.x, det.player.z];
+      this.setState(m, 'chase');
+      this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
+      if (det.nd < m.def.attackRange) {
+        this.setState(m, 'attack');
+        this.audio.monsterAttack(m.x, 1.7, m.z);
+        if (this.onCaught) this.onCaught(m, det.player);
+        this.setState(m, 'cooldown');
+        return;
+      }
+      return;
+    }
+    if (m.lastSeen) {
+      this.setState(m, 'search');
+      this.wander(m, dt, 1.0);
+      return;
+    }
+    this.setState(m, 'patrol');
+    this.wander(m, dt, 0.9);
+  }
+
+  // ---- THE REMEMBERER: memorises rooms it has seen you in; walks back
+  // through them in order when it loses you.
+  aiRememberer(m, dt, det) {
+    if (det) {
+      m.lastSeen = [det.player.x, det.player.z];
+      this.setState(m, 'chase');
+      this.moveToward(m, det.player.x, det.player.z, m.def.speed, dt);
+      if (det.nd < m.def.attackRange) {
+        this.setState(m, 'attack');
+        this.audio.monsterAttack(m.x, 1.5, m.z);
+        if (this.onCaught) this.onCaught(m, det.player);
+        this.setState(m, 'cooldown');
+        return;
+      }
+      return;
+    }
+    if (m.lastSeen) {
+      this.setState(m, 'search');
+      this.wander(m, dt, 0.9);
+      return;
+    }
+    this.setState(m, 'patrol');
+    this.wander(m, dt, 0.7);
   }
 
   // ---- THE HOLLOW: motionless congregation. Lurches toward you in the dark,

@@ -119,6 +119,84 @@ export const MONSTER_TYPES = {
     keepDist: [0, 0], vision: 22, hearing: 14, attackRange: 1.0, lethal: true,
     chaseGiveUp: 28, farSpawn: true, flashReact: 'reveal', pack: 1,
   },
+  theunstoppable: {
+    name: 'THE UNSTOPPABLE', speed: 4.6, aggroRange: 34, despawnLookAt: 0,
+    despawnDist: 180, voice: 'theunstoppable', rarity: 0.012, privateOnly: false,
+    keepDist: [0, 0], vision: 30, hearing: 30, attackRange: 1.3, lethal: true,
+    chaseGiveUp: 42, pack: 1, unstoppable: true, heavy: true,
+  },
+  leech: {
+    name: 'THE LEECH', speed: 3.6, aggroRange: 9, despawnLookAt: 0,
+    despawnDist: 70, voice: 'leech', rarity: 0.13, privateOnly: false,
+    keepDist: [0, 0], vision: 8, hearing: 16, attackRange: 0.8, lethal: true,
+    chaseGiveUp: 20, prefersDark: true, lowProfile: true, pack: 2,
+  },
+  king: {
+    name: 'THE KING', speed: 2.2, aggroRange: 30, despawnLookAt: 0,
+    despawnDist: 120, voice: 'king', rarity: 0.04, privateOnly: false,
+    keepDist: [0, 0], vision: 36, hearing: 8, attackRange: 1.6, lethal: true,
+    chaseGiveUp: 26, pack: 1, farSpawn: true, heavy: true,
+  },
+  flicker: {
+    name: 'THE FLICKER', speed: 2.6, aggroRange: 22, despawnLookAt: 0,
+    despawnDist: 85, voice: 'flicker', rarity: 0.08, privateOnly: false,
+    keepDist: [0, 0], vision: 26, hearing: 12, attackRange: 1.0, lethal: true,
+    chaseGiveUp: 24, pack: 1, lurch: true, flashReact: 'avoid',
+  },
+  drifter: {
+    name: 'THE DRIFTER', speed: 1.4, aggroRange: 18, despawnLookAt: 0,
+    despawnDist: 90, voice: 'drifter', rarity: 0.09, privateOnly: false,
+    keepDist: [0, 0], vision: 20, hearing: 4, attackRange: 1.1, lethal: true,
+    chaseGiveUp: 18, pack: 1, moveWhenUnseen: true,
+  },
+  statue: {
+    name: 'THE STATUE', speed: 3.0, aggroRange: 26, despawnLookAt: 0,
+    despawnDist: 110, voice: 'statue', rarity: 0.07, privateOnly: false,
+    keepDist: [0, 0], vision: 0, hearing: 0, attackRange: 0.9, lethal: true,
+    chaseGiveUp: 22, pack: 1, flashReact: 'freeze',
+  },
+  swarm: {
+    name: 'THE SWARM', speed: 4.0, aggroRange: 16, despawnLookAt: 0,
+    despawnDist: 60, voice: 'swarm', rarity: 0.10, privateOnly: false,
+    keepDist: [0, 0], vision: 14, hearing: 18, attackRange: 0.6, lethal: true,
+    chaseGiveUp: 14, pack: 4, lowProfile: true,
+  },
+  spitter: {
+    name: 'THE SPITTER', speed: 0, aggroRange: 0, despawnLookAt: 0,
+    despawnDist: 70, voice: 'spitter', rarity: 0.07, privateOnly: false,
+    keepDist: [0, 0], vision: 24, hearing: 6, attackRange: 9.0, lethal: true,
+    chaseGiveUp: 0, pack: 1, ranged: true,
+  },
+  drummer: {
+    name: 'THE DRUMMER', speed: 3.9, aggroRange: 0, despawnLookAt: 0,
+    despawnDist: 100, voice: 'drummer', rarity: 0.08, privateOnly: false,
+    keepDist: [0, 0], vision: 0, hearing: 34, attackRange: 1.0, lethal: true,
+    chaseGiveUp: 22, pack: 1, flashReact: 'enrage',
+  },
+  worm: {
+    name: 'THE WORM', speed: 4.4, aggroRange: 14, despawnLookAt: 0,
+    despawnDist: 85, voice: 'worm', rarity: 0.11, privateOnly: false,
+    keepDist: [0, 0], vision: 0, hearing: 24, attackRange: 1.0, lethal: true,
+    chaseGiveUp: 18, pack: 1, submerged: true, levelOnly: 3,
+  },
+  null: {
+    name: 'THE NULL', speed: 2.8, aggroRange: 20, despawnLookAt: 0,
+    despawnDist: 95, voice: 'null', rarity: 0.03, privateOnly: false,
+    keepDist: [0, 0], vision: 24, hearing: 10, attackRange: 1.2, lethal: true,
+    chaseGiveUp: 20, pack: 1, moveWhenUnseen: true,
+  },
+  thresher: {
+    name: 'THE THRESHER', speed: 5.0, aggroRange: 26, despawnLookAt: 0,
+    despawnDist: 110, voice: 'thresher', rarity: 0.06, privateOnly: false,
+    keepDist: [0, 0], vision: 18, hearing: 20, attackRange: 1.3, lethal: true,
+    chaseGiveUp: 20, pack: 1, heavy: true,
+  },
+  rememberer: {
+    name: 'THE REMEMBERER', speed: 2.0, aggroRange: 24, despawnLookAt: 0,
+    despawnDist: 130, voice: 'rememberer', rarity: 0.05, privateOnly: false,
+    keepDist: [0, 0], vision: 28, hearing: 12, attackRange: 1.0, lethal: true,
+    chaseGiveUp: 40, pack: 1,
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -841,6 +919,370 @@ export function buildMonster(type) {
         u.limbs.push({ g: arm, kind: 'arm', side: s }, { g: leg, kind: 'leg', side: s });
       }
       u.upsideDown = true;
+      break;
+    }
+    case 'theunstoppable': {
+      // 2.6m of wrong anatomy: head too small for the body, arms that hang
+      // past the knees and end in splayed claws, jaw permanently open.
+      const mat = rotDarkM(), bone = boneExM();
+      const t = emaciatedTorso(mat, bone, 0.42, 1.1, 5);
+      t.gT.position.y = 2.15;
+      g.add(t.gT);
+      u.detail.push(...t.detail);
+      const headR = horrorHead({ skin: mat, scale: 1.05 });
+      headR.hd.position.set(0, 2.85, 0.02);
+      if (headR.jawG) headR.jawG.rotation.x = 0.55; // never closed
+      g.add(headR.hd);
+      u.head = headR.hd;
+      if (headR.jawG) u.jaw = headR.jawG;
+      for (const s of [-1, 1]) {
+        const { arm, hand } = longArm(s, mat, 1.85 + (s > 0 ? 0.2 : 0), 5);
+        arm.position.set(s * 0.24, 2.55, 0);
+        arm.rotation.z = s * 0.06;
+        g.add(arm);
+        u.detail.push(...hand.children);
+        const leg = limb(0.1, 1.6, rotDeepM());
+        leg.position.set(s * 0.12, 1.7, 0);
+        if (s > 0) leg.scale.setScalar(1.08);
+        g.add(leg);
+        u.limbs.push({ g: arm, kind: 'arm', side: s }, { g: leg, kind: 'leg', side: s });
+      }
+      break;
+    }
+    case 'leech': {
+      // floor-crawler: low profile, two pale arms drag it across the carpet
+      const skin = hollowSkinM();
+      const body = new THREE.Mesh(new THREE.SphereGeometry(0.26, 8, 6), skin);
+      body.scale.set(1.3, 0.4, 1.6);
+      body.position.y = 0.22;
+      g.add(body);
+      const headR = horrorHead({ skin, scale: 0.75, jaw: false });
+      headR.hd.position.set(0, 0.28, 0.42);
+      headR.hd.rotation.x = 0.3;
+      g.add(headR.hd);
+      u.head = headR.hd;
+      for (const s of [-1, 1]) {
+        const arm = limb(0.04, 0.6, skin);
+        arm.position.set(s * 0.22, 0.3, 0.25);
+        arm.rotation.x = -0.7;
+        g.add(arm);
+        fingers(arm, 0, -0.6, 0, 4, 0.18, skin, 0.04);
+        u.limbs.push({ g: arm, kind: 'arm', side: s });
+      }
+      u.lowProfile = true;
+      break;
+    }
+    case 'king': {
+      // 5m of thin legs and a crown of ribs, small head, slow deliberate steps
+      const mat = rotPaleM(), bone = boneExM();
+      const t = emaciatedTorso(mat, bone, 0.5, 2.0, 6);
+      t.gT.position.y = 2.8;
+      g.add(t.gT);
+      u.detail.push(...t.detail);
+      const crown = new THREE.Group();
+      for (let i = 0; i < 6; i++) {
+        const r = new THREE.Mesh(new THREE.TorusGeometry(0.2 + i * 0.03, 0.018, 5, 8), bone);
+        r.position.y = 0.05 + i * 0.06;
+        r.rotation.x = Math.PI / 2;
+        crown.add(r);
+        u.detail.push(r);
+      }
+      crown.position.set(0, 4.55, 0);
+      g.add(crown);
+      const headR = horrorHead({ skin: mat, scale: 0.9 });
+      headR.hd.position.set(0, 4.85, 0.02);
+      g.add(headR.hd);
+      u.head = headR.hd;
+      if (headR.jawG) u.jaw = headR.jawG;
+      for (const s of [-1, 1]) {
+        const { arm, hand } = longArm(s, mat, 2.3 + (s > 0 ? 0.15 : 0), 5);
+        arm.position.set(s * 0.28, 3.5, 0);
+        arm.rotation.z = s * 0.04;
+        g.add(arm);
+        u.detail.push(...hand.children);
+        const leg = limb(0.12, 2.0, rotDeepM());
+        leg.position.set(s * 0.14, 1.85, 0);
+        g.add(leg);
+        u.limbs.push({ g: arm, kind: 'arm', side: s }, { g: leg, kind: 'leg', side: s });
+      }
+      break;
+    }
+    case 'flicker': {
+      // looks almost human until it blinks: then it's two steps closer
+      const mat = hollowSkinM();
+      const t = emaciatedTorso(mat, boneExM(), 0.34, 0.95, 4);
+      t.gT.position.y = 1.4;
+      g.add(t.gT);
+      u.detail.push(...t.detail);
+      const headR = horrorHead({ skin: mat, scale: 0.9 });
+      headR.hd.position.set(0, 1.95, 0.02);
+      g.add(headR.hd);
+      u.head = headR.hd;
+      if (headR.jawG) u.jaw = headR.jawG;
+      for (const s of [-1, 1]) {
+        const { arm } = longArm(s, mat, 1.15, 4);
+        arm.position.set(s * 0.2, 1.75, 0);
+        arm.rotation.z = s * 0.08;
+        g.add(arm);
+        const leg = limb(0.07, 1.0, mat);
+        leg.position.set(s * 0.09, 1.05, 0);
+        g.add(leg);
+        u.limbs.push({ g: arm, kind: 'arm', side: s }, { g: leg, kind: 'leg', side: s });
+      }
+      break;
+    }
+    case 'drifter': {
+      // a figure that only ever faces you sideways, wrong-height, always in
+      // a doorway's shadow until the flashlight catches it
+      const mat = voidM();
+      const t = emaciatedTorso(mat, rotDeepM(), 0.28, 0.85, 3);
+      t.gT.position.y = 1.3;
+      g.add(t.gT);
+      u.detail.push(...t.detail);
+      const headR = horrorHead({ skin: mat, scale: 0.8, pupils: false });
+      headR.hd.position.set(0.03, 1.85, 0.02);
+      headR.hd.rotation.y = Math.PI / 2.4; // sideways, always
+      g.add(headR.hd);
+      u.head = headR.hd;
+      for (const s of [-1, 1]) {
+        const { arm } = longArm(s, mat, 1.1, 4);
+        arm.position.set(s * 0.18, 1.6, 0);
+        arm.rotation.z = s * 0.5;
+        g.add(arm);
+        const leg = limb(0.055, 0.85, mat);
+        leg.position.set(s * 0.08, 0.85, 0);
+        if (s > 0) leg.rotation.x = 0.2;
+        g.add(leg);
+        u.limbs.push({ g: arm, kind: 'arm', side: s }, { g: leg, kind: 'leg', side: s });
+      }
+      break;
+    }
+    case 'statue': {
+      // a person-shaped block of grey that only moves when unobserved
+      const mat = plasterM();
+      const t = emaciatedTorso(mat, boneExM(), 0.32, 0.9, 4);
+      t.gT.position.y = 1.35;
+      g.add(t.gT);
+      u.detail.push(...t.detail);
+      const headR = horrorHead({ skin: mat, scale: 0.85, jaw: false, pupils: false });
+      headR.hd.position.set(0, 1.95, 0.02);
+      g.add(headR.hd);
+      u.head = headR.hd;
+      for (const s of [-1, 1]) {
+        const { arm } = longArm(s, mat, 1.0, 4);
+        arm.position.set(s * 0.18, 1.7, 0);
+        arm.rotation.z = s * 0.03;
+        g.add(arm);
+        const leg = limb(0.06, 0.9, mat);
+        leg.position.set(s * 0.09, 0.95, 0);
+        g.add(leg);
+        u.limbs.push({ g: arm, kind: 'arm', side: s }, { g: leg, kind: 'leg', side: s });
+      }
+      break;
+    }
+    case 'swarm': {
+      // one of many: small chitinous thing that scuttles toward light
+      const mat = rotDeepM();
+      const body = new THREE.Mesh(new THREE.SphereGeometry(0.14, 7, 5), mat);
+      body.scale.set(1, 0.55, 1.4);
+      body.position.y = 0.12;
+      g.add(body);
+      const headR = horrorHead({ skin: mat, scale: 0.55, jaw: false, pupils: false });
+      headR.hd.position.set(0, 0.18, 0.22);
+      g.add(headR.hd);
+      u.head = headR.hd;
+      for (const s of [-1, 1]) {
+        for (let i = 0; i < 3; i++) {
+          const leg = limb(0.02, 0.22, mat);
+          leg.position.set(s * (0.08 + i * 0.05), 0.16, -0.1 + i * 0.1);
+          leg.rotation.z = s * (0.6 + i * 0.2);
+          g.add(leg);
+          u.limbs.push({ g: leg, kind: 'leg', side: s });
+        }
+      }
+      break;
+    }
+    case 'spitter': {
+      // hangs in the doorway, wide-open mouth full of black fluid
+      const mat = voidM();
+      const t = emaciatedTorso(mat, rotDarkM(), 0.34, 0.8, 3);
+      t.gT.position.y = 1.2;
+      g.add(t.gT);
+      u.detail.push(...t.detail);
+      const headR = horrorHead({ skin: mat, scale: 0.9 });
+      headR.hd.position.set(0, 1.65, 0.02);
+      if (headR.jawG) headR.jawG.rotation.x = 0.9; // permanently gaping
+      g.add(headR.hd);
+      u.head = headR.hd;
+      if (headR.jawG) u.jaw = headR.jawG;
+      // mouth pool: a dark disc just under the jaw
+      const pool = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.03, 7), gumDarkM());
+      pool.position.set(0, 1.55, 0.1);
+      g.add(pool);
+      u.detail.push(pool);
+      for (const s of [-1, 1]) {
+        const arm = limb(0.045, 0.7, mat);
+        arm.position.set(s * 0.2, 1.55, 0.05);
+        arm.rotation.x = 0.4;
+        g.add(arm);
+        u.limbs.push({ g: arm, kind: 'arm', side: s });
+      }
+      break;
+    }
+    case 'drummer': {
+      // blind: large ears instead of eyes, heavy forearms it slams together
+      const mat = rotDarkM();
+      const t = emaciatedTorso(mat, boneExM(), 0.42, 0.95, 4);
+      t.gT.position.y = 1.45;
+      g.add(t.gT);
+      u.detail.push(...t.detail);
+      const headR = horrorHead({ skin: mat, scale: 0.85, pupils: false, jaw: false });
+      headR.hd.position.set(0, 2.05, 0.02);
+      // two oversized ears where eyes should be
+      for (const s of [-1, 1]) {
+        const ear = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 5), mat);
+        ear.scale.set(0.5, 1.1, 0.3);
+        ear.position.set(s * 0.1, 0.02, 0.12);
+        headR.hd.add(ear);
+      }
+      g.add(headR.hd);
+      u.head = headR.hd;
+      for (const s of [-1, 1]) {
+        const arm = limb(0.07, 0.95, mat);
+        arm.position.set(s * 0.28, 1.85, 0.05);
+        arm.rotation.z = s * 0.15;
+        g.add(arm);
+        const fist = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 0.16), mat);
+        fist.position.set(s * 0.28, 1.85 - 0.95, 0.08);
+        g.add(fist);
+        u.detail.push(fist);
+        const leg = limb(0.09, 1.05, rotDeepM());
+        leg.position.set(s * 0.11, 1.1, 0);
+        g.add(leg);
+        u.limbs.push({ g: arm, kind: 'arm', side: s }, { g: leg, kind: 'leg', side: s });
+      }
+      break;
+    }
+    case 'worm': {
+      // a long slick tube that slides through the water; no face, no eyes
+      const mat = wetBlackM();
+      const body = new THREE.Mesh(new THREE.SphereGeometry(0.3, 9, 7), mat);
+      body.scale.set(1.4, 0.6, 1.8);
+      body.position.y = 0.35;
+      g.add(body);
+      for (let i = 0; i < 3; i++) {
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.24 - i * 0.02, 0.02, 5, 10), mat);
+        ring.position.set(0, 0.35 + i * 0.12, -0.28 - i * 0.15);
+        ring.rotation.x = -0.6;
+        g.add(ring);
+        u.detail.push(ring);
+      }
+      const headR = horrorHead({ skin: mat, scale: 0.7, jaw: false, pupils: false });
+      headR.hd.position.set(0, 0.45, 0.5);
+      headR.hd.rotation.x = 0.4;
+      g.add(headR.hd);
+      u.head = headR.hd;
+      for (const s of [-1, 1]) {
+        const arm = limb(0.035, 0.6, mat);
+        arm.position.set(s * 0.28, 0.4, 0.15);
+        arm.rotation.x = -0.5;
+        arm.rotation.z = s * 0.6;
+        g.add(arm);
+        u.limbs.push({ g: arm, kind: 'arm', side: s });
+      }
+      break;
+    }
+    case 'null': {
+      // almost featureless: tall, thin, wrong proportions, no face at all
+      const mat = voidM();
+      const t = emaciatedTorso(mat, rotDeepM(), 0.26, 1.2, 4);
+      t.gT.position.y = 1.9;
+      g.add(t.gT);
+      u.detail.push(...t.detail);
+      const headR = horrorHead({ skin: mat, scale: 0.8, jaw: false, pupils: false });
+      headR.hd.position.set(0, 2.6, 0);
+      g.add(headR.hd);
+      u.head = headR.hd;
+      for (const s of [-1, 1]) {
+        const { arm } = longArm(s, mat, 1.55 + (s > 0 ? 0.12 : 0), 5);
+        arm.position.set(s * 0.18, 2.3, 0);
+        arm.rotation.z = s * 0.04;
+        g.add(arm);
+        const leg = limb(0.06, 1.35, rotDeepM());
+        leg.position.set(s * 0.1, 1.4, 0);
+        if (s > 0) leg.scale.setScalar(1.05);
+        g.add(leg);
+        u.limbs.push({ g: arm, kind: 'arm', side: s }, { g: leg, kind: 'leg', side: s });
+      }
+      break;
+    }
+    case 'thresher': {
+      // blade-arms spinning, head packed with sockets that all watch at once
+      const mat = rotDeepM(), blade = boneExM();
+      const t = emaciatedTorso(mat, blade, 0.38, 1.0, 4);
+      t.gT.position.y = 1.6;
+      g.add(t.gT);
+      u.detail.push(...t.detail);
+      const headR = horrorHead({ skin: mat, scale: 1.0 });
+      headR.hd.position.set(0, 2.25, 0.02);
+      // extra eye sockets all over the skull
+      for (let i = 0; i < 5; i++) {
+        const sock = new THREE.Mesh(new THREE.SphereGeometry(0.02, 5, 4), socketBlackM());
+        sock.position.set(Math.sin(i * 2.3) * 0.06, 0.05 + i * 0.04, 0.1);
+        headR.hd.add(sock);
+        u.detail.push(sock);
+      }
+      g.add(headR.hd);
+      u.head = headR.hd;
+      if (headR.jawG) u.jaw = headR.jawG;
+      for (const s of [-1, 1]) {
+        const { arm } = longArm(s, mat, 1.2, 3);
+        arm.position.set(s * 0.22, 2.0, 0);
+        arm.rotation.z = s * 0.4;
+        g.add(arm);
+        // blade where the hand should be
+        const bl = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.4, 5), blade);
+        bl.position.set(0, -1.2, 0.1);
+        bl.rotation.x = Math.PI / 2;
+        arm.add(bl);
+        u.detail.push(bl);
+        const leg = limb(0.08, 1.15, rotDeepM());
+        leg.position.set(s * 0.1, 1.2, 0);
+        g.add(leg);
+        u.limbs.push({ g: arm, kind: 'arm', side: s }, { g: leg, kind: 'leg', side: s });
+      }
+      break;
+    }
+    case 'rememberer': {
+      // tall, gaunt, covered in small hands that point at you — it remembers
+      const mat = hollowSkinM();
+      const t = emaciatedTorso(mat, boneExM(), 0.34, 1.2, 5);
+      t.gT.position.y = 1.7;
+      g.add(t.gT);
+      u.detail.push(...t.detail);
+      const headR = horrorHead({ skin: mat, scale: 0.95 });
+      headR.hd.position.set(0, 2.35, 0.02);
+      g.add(headR.hd);
+      u.head = headR.hd;
+      if (headR.jawG) u.jaw = headR.jawG;
+      // small hands sprouting from the chest, all pointing forward
+      for (let i = 0; i < 4; i++) {
+        const tiny = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.12, 0.04), mat);
+        tiny.position.set(-0.06 + i * 0.04, 1.6 + (i % 2) * 0.25, 0.2);
+        tiny.rotation.z = -0.4 + (i % 2) * 0.2;
+        g.add(tiny);
+        u.detail.push(tiny);
+      }
+      for (const s of [-1, 1]) {
+        const { arm } = longArm(s, mat, 1.3, 5);
+        arm.position.set(s * 0.2, 2.05, 0);
+        arm.rotation.z = s * 0.07;
+        g.add(arm);
+        const leg = limb(0.07, 1.15, rotDeepM());
+        leg.position.set(s * 0.1, 1.2, 0);
+        g.add(leg);
+        u.limbs.push({ g: arm, kind: 'arm', side: s }, { g: leg, kind: 'leg', side: s });
+      }
       break;
     }
     case 'falseplayer': {

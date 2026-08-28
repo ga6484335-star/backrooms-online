@@ -174,7 +174,11 @@ async function main() {
         const gotLocked = await cdp.eval(`window.__dbg.prompt()`);
         check(/LOCKED|NEED|KEY/.test(String(gotLocked)), 'locked door prompt shows LOCKED: ' + gotLocked);
       } else {
-        check(after && after.open !== d.open, 'unlocked door toggled open/closed: ' + d.open + ' -> ' + (after && after.open));
+        // the door may already be open when we toggle it; a valid interaction
+        // is "state changed" — before-open->after-closed or before-closed->after-open
+        const beforeOpen = d.open;
+        const toggled = after && after.open !== beforeOpen;
+        check(toggled, 'unlocked door toggled open/closed: ' + beforeOpen + ' -> ' + (after && after.open));
       }
     } else {
       check(true, 'no doors in first 6 chunks (rarare seeds skip bind)');

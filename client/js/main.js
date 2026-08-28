@@ -1072,6 +1072,7 @@ window.__dbg = {
 
         target: m.target ? m.target.id : null,
         life: +m.life.toFixed(1), despawnDist: m.def.despawnDist,
+        dead: player.dead,
         hasLOS: monsters.hasLOS(player.pos.x, player.pos.z, m.x, m.z),
       };
     });

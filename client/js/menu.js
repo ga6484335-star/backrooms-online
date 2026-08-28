@@ -1,3 +1,5 @@
+import * as THREE from "three";
+import { buildMonster, MONSTER_TYPES } from "./monsters/defs.js";
 // Menu / lobby UI wiring + animated VHS static backgrounds.
 export class MenuUI {
   constructor(cb) {
@@ -7,6 +9,8 @@ export class MenuUI {
 
     this._bindButtons();
     this._startStatic();
+    this._monsterCards = null;
+    this._monsterTypes = MONSTER_TYPES;
   }
 
   _bindButtons() {
@@ -20,6 +24,8 @@ export class MenuUI {
     };
     E('btn-join-back').onclick = () => this._show('menu');
     E('btn-settings').onclick = () => { this.settingsFromGame = false; E('settings-hint').classList.add('hidden'); this._show('settings-panel'); };
+    E('btn-monsters').onclick = () => { this._show('monsters-panel'); this._buildMonsterCards(); };
+    E('btn-monsters-back').onclick = () => this._show('menu');
     E('btn-settings-back').onclick = () => {
       this._applySettings();
       if (this.settingsFromGame) {
@@ -137,6 +143,97 @@ export class MenuUI {
     const me = room.players.find((p) => p.id === room.meId);
     E('btn-start').style.display = me && me.host ? '' : 'none';
     E('lobby-level').disabled = !(me && me.host);
+  }
+
+  _buildMonsterCards() {
+    if (this._monsterCards) return; // built once per session
+    this._monsterCards = true;
+    const grid = this.el('monster-grid');
+    if (!grid) return;
+    // static data about each monster: what it does + how to survive it
+    const GUIDE = {
+      watcher:   { d: 'Watches from a distance. Creeps closer when you look away.', e: 'Keep your eyes on it; it retreats if you stare.', danger: 'LOW' },
+      stalker:   { d: 'Follows from the shadows and freezes when seen.', e: 'Spot it and back away slowly.', danger: 'MEDIUM' },
+      hunter:    { d: 'Fast pack predator. Hears footsteps.', e: 'Run. Close doors. Break line of sight.', danger: 'HIGH' },
+      ambusher:  { d: 'Sits motionless in darkness. Lunges when close.', e: 'Keep your distance; it won’t chase far.', danger: 'MEDIUM' },
+      mimic:     { d: 'Looks like furniture until you touch it.', e: 'Don’t sit on things that aren’t chairs.', danger: 'MEDIUM' },
+      shadow:    { d: 'A hole in the light. It watches.', e: 'It cannot hurt you — but it marks you.', danger: 'LOW' },
+      runner:    { d: 'Very fast. Screams, then sprints.', e: 'Turn corners. It outruns stamina, not walls.', danger: 'HIGH' },
+      crawler:   { d: 'Low, fast, many legs. Hunts sound in narrow spaces.', e: 'Stay quiet; move through open rooms.', danger: 'HIGH' },
+      siren:     { d: 'Stands far away and sings.', e: 'Walk away. It is only luring you into the dark.', danger: 'LOW' },
+      tallone:   { d: 'A silhouette at the end of a corridor.', e: 'It only moves when you aren’t looking. Keep walking.', danger: 'LOW' },
+      hollow:    { d: 'Freezes in your flashlight. Lurches in the dark.', e: 'Light freezes it. Never lose sight of it.', danger: 'MEDIUM' },
+      bonefiend: { d: 'White, wrong-jointed, hunts by sound.', e: 'Stay silent; it cannot see you, only hear you.', danger: 'HIGH' },
+      walldweller: { d: 'A stain on the wall until you brush past.', e: 'Don’t touch the walls.', danger: 'HIGH' },
+      deepone:   { d: 'Flooded areas only. Submerges under light.', e: 'Flashlight makes it dive. Cross quickly in the dark.', danger: 'HIGH' },
+      ceiling:   { d: 'Hangs upside down. Drops when you linger below.', e: 'Don’t stand underneath it for more than 3 seconds.', danger: 'MEDIUM' },
+      falseplayer: { d: 'Looks like your friend from far away.', e: 'If it walks wrong, run. It is not them.', danger: 'MEDIUM' },
+      theunstoppable: { d: 'UNSTOPPABLE. CANNOT BE DEFEATED. ONLY ESCAPE.', e: 'RUN. Turn corners. Close doors. Break line of sight. It never stops.', danger: 'MAXIMUM' },
+      leech:     { d: 'Low crawler. Lives in the dark and the flood.', e: 'Watch the floor. It is under you before you see it.', danger: 'MEDIUM' },
+      king:      { d: '5m tall. Sees far, slow, crown of ribs.', e: 'Outrun it. It is slow — but it does not forget.', danger: 'HIGH' },
+      flicker:   { d: 'Only exists between frames.', e: 'Blink. It teleports closer when you do.', danger: 'HIGH' },
+      drifter:   { d: 'Only faces you sideways. Slides through doorways.', e: 'Keep it in your periphery. It hates direct light.', danger: 'MEDIUM' },
+      statue:    { d: 'Perfectly still while watched. Closes distance when you blink.', e: 'Keep looking at it. Don’t blink.', danger: 'MEDIUM' },
+      swarm:     { d: 'Many small things. Pile into the light.', e: 'Stay together. Alone they are slow.', danger: 'HIGH' },
+      spitter:   { d: 'Waits at a doorway. Does not follow.', e: 'Don’t walk through the doorway it is guarding.', danger: 'MEDIUM' },
+      drummer:   { d: 'Blind. Pounds walls. Hunts by sound only.', e: 'Stop walking. Turn off the flashlight.', danger: 'HIGH' },
+      worm:      { d: 'Flooded levels only. Long, blind, moves through water.', e: 'Move slowly. Splashing tells it where you are.', danger: 'HIGH' },
+      null:      { d: 'No voice. No footsteps. Stands where you were.', e: 'Never stop walking. It is always a step behind.', danger: 'MEDIUM' },
+      thresher:  { d: 'Blade-arms. Cuts through corridors.', e: 'Turn into rooms. It can’t stop mid-corridor.', danger: 'HIGH' },
+      rememberer: { d: 'Memorises rooms it has seen you in. Walks them in order.', e: 'Never backtrack. It knows the last room.', danger: 'HIGH' },
+    };
+    const grid2 = this.el('monster-grid');
+    for (const [type, def] of Object.entries(this._monsterTypes || window.MONSTER_TYPES || {})) {
+      if (type === 'shadow') continue; // hallucinations stay hidden
+      const info = GUIDE[type] || { d: def.name + ' — behaviour unclassified.', e: 'Run.', danger: def.lethal ? 'HIGH' : 'LOW' };
+      const card = document.createElement('div');
+      card.className = 'monster-card' + (def.unstoppable ? ' unstoppable' : '');
+      card.innerHTML = `<div class="mc-name">${def.name}</div><canvas></canvas>
+        <div class="mc-tag">${def.lethal ? 'LETHAL' : 'WATCHES'}</div>
+        <div class="mc-desc">${info.d}</div>
+        <div class="mc-desc" style="margin-top:4px;"><em>Escape:</em> ${info.e}</div>
+        <div class="mc-danger">${info.danger}</div>`;
+      grid2.appendChild(card);
+      // live 3D portrait: render the actual monster model in a tiny canvas
+      const cvs = card.querySelector('canvas');
+      try {
+        const r = new THREE.WebGLRenderer({ canvas: cvs, alpha: true, antialias: false });
+        r.setSize(180, 120, false);
+        r.setPixelRatio(1);
+        const sc = new THREE.Scene();
+        sc.background = null;
+        const cam = new THREE.PerspectiveCamera(50, 180 / 120, 0.1, 30);
+        cam.position.set(0, 1.2, 4.2);
+        cam.lookAt(0, 1.1, 0);
+        sc.add(new THREE.AmbientLight(0x403828, 0.6));
+        const key = new THREE.PointLight(0xc8b890, 18, 12);
+        key.position.set(2, 2.5, 2);
+        sc.add(key);
+        const rim = new THREE.PointLight(0x6a7a8a, 8, 12);
+        rim.position.set(-2, 1.6, -2);
+        sc.add(rim);
+        const mesh = buildMonster(type);
+        // auto-frame the monster by its bounding box
+        const box = new THREE.Box3().setFromObject(mesh);
+        const h = box.max.y - box.min.y;
+        const s2 = 2.4 / Math.max(h, 0.8);
+        mesh.scale.setScalar(s2);
+        mesh.position.y = -(box.min.y) * s2 - 0.1;
+        sc.add(mesh);
+        const clock = { t: Math.random() * 10 };
+        const tick = () => {
+          if (!cvs.isConnected) { r.dispose(); return; } // card was removed
+          clock.t += 0.016;
+          mesh.rotation.y = clock.t * 0.4;
+          r.render(sc, cam);
+          requestAnimationFrame(tick);
+        };
+        tick();
+      } catch (e) {
+        // WebGL unavailable in headless/menu contexts: blank canvas is fine
+        cvs.style.background = '#0a0804';
+      }
+    }
   }
 
   _startStatic() {
