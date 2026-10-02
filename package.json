@@ -10,7 +10,8 @@
     "test:browser": "node test/browser.test.js",
     "test:2p": "node test/browser2p.test.js",
     "test:all": "node test/multiplayer.test.js && node test/worldgen.test.mjs && node test/monsters.test.mjs && node test/browser.test.js && node test/browser2p.test.js",
-    "test:world": "node test/worldgen.test.mjs"
+    "test:world": "node test/worldgen.test.mjs",
+    "test:pages": "node test/pages.test.js"
   },
   "keywords": [
     "backrooms",
