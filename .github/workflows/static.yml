@@ -35,6 +35,18 @@ jobs:
         run: |
           cp -R client pages-site
           sed -i 's|"/css/|"./css/|g; s|"/js/|"./js/|g; s|"/vendor/|"./vendor/|g' pages-site/index.html
+      - name: Connect Pages to Render
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("pages-site/js/network.js")
+          s = p.read_text()
+          s = s.replace(
+              "new WebSocket(`${proto}//${location.host}/ws`)",
+              "new WebSocket('wss://backrooms-online-iv18.onrender.com/ws')"
+          )
+          p.write_text(s)
+          PY
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact
