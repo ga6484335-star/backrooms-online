@@ -31,29 +31,81 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # The client resolves "three" and "three/addons/..." through the importmap
+      # in client/index.html. On Render the Express server serves those from
+      # node_modules/three. Pages has no server, so the workflow must vendor the
+      # exact files the client imports into the published site.
+      - name: Install dependencies (for the three.js vendor bundle)
+        run: npm ci
+
       - name: Prepare Pages site
         run: |
           cp -R client pages-site
           sed -i 's|"/css/|"./css/|g; s|"/js/|"./js/|g; s|"/vendor/|"./vendor/|g' pages-site/index.html
+
+      - name: Vendor three.js
+        run: |
+          set -e
+          # three.module.js re-exports from ./three.core.js, so both are required.
+          mkdir -p pages-site/vendor/three/build
+          cp node_modules/three/build/three.module.js pages-site/vendor/three/build/
+          cp node_modules/three/build/three.core.js   pages-site/vendor/three/build/
+          # Only the postprocessing + shaders addons are imported by the client.
+          mkdir -p pages-site/vendor/three/examples/jsm
+          cp -R node_modules/three/examples/jsm/postprocessing pages-site/vendor/three/examples/jsm/
+          cp -R node_modules/three/examples/jsm/shaders        pages-site/vendor/three/examples/jsm/
+
       - name: Connect Pages to Render
         run: |
           python3 - <<'PY'
+          import re
           from pathlib import Path
+
           p = Path("pages-site/js/network.js")
           s = p.read_text()
-          s = s.replace(
-              "new WebSocket(`${proto}//${location.host}/ws`)",
-              "new WebSocket('wss://backrooms-online-iv18.onrender.com/ws')"
+          # GitHub Pages is static-only: point the client at the Render backend.
+          s2, n = re.subn(
+              r"new WebSocket\(`\$\{proto\}//\$\{location\.host\}/ws`\)",
+              "new WebSocket('wss://backrooms-online-iv18.onrender.com/ws')",
+              s,
           )
-          p.write_text(s)
+          if n == 0:
+              raise SystemExit("network.js: WebSocket line not found - update this workflow")
+          p.write_text(s2)
+          print(f"network.js patched ({n} replacement)")
           PY
+
+      # Fail the deploy instead of publishing a site that cannot boot.
+      - name: Verify published site is complete
+        run: |
+          set -e
+          test -f pages-site/js/main.js
+          test -f pages-site/vendor/three/build/three.module.js
+          test -f pages-site/vendor/three/build/three.core.js
+          for f in \
+            postprocessing/EffectComposer.js \
+            postprocessing/RenderPass.js \
+            postprocessing/ShaderPass.js \
+            postprocessing/UnrealBloomPass.js \
+            postprocessing/OutputPass.js \
+            shaders/CopyShader.js \
+            shaders/LuminosityHighPassShader.js \
+            shaders/OutputShader.js ; do
+            test -f "pages-site/vendor/three/examples/jsm/$f" || { echo "missing addon: $f"; exit 1; }
+          done
+          grep -q "wss://backrooms-online-iv18.onrender.com/ws" pages-site/js/network.js
+          grep -q '"./vendor/three/build/three.module.js"' pages-site/index.html
+          echo "published site verified"
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # Upload entire repository
-          path:    pages-site
+          path: pages-site
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
