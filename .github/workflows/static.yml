@@ -28,16 +28,20 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-    steps: 
+    steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v
+      - name: Prepare Pages site
+        run: |
+          cp -R client pages-site
+          sed -i 's|"/css/|"./css/|g; s|"/js/|"./js/|g; s|"/vendor/|"./vendor/|g' pages-site/index.html
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           # Upload entire repository
-          path:    client
+          path:    pages-site
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
