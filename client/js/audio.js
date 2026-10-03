@@ -216,6 +216,26 @@ export class AudioEngine {
     o.start(t); o.stop(t + duration + 0.2);
   }
 
+  // level signature hazard: a low electrical warning that rises when the surge
+  // is active. Called every frame from the hazard update, internally throttled.
+  hazardLoop(kind, x, z) {
+    if (!this.ensure()) return;
+    const now = this.ctx.currentTime;
+    const gap = kind === 'current' ? 0.5 : 0.9;
+    if (this._hzAt && now - this._hzAt < gap) return;
+    this._hzAt = now;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.type = kind === 'current' ? 'sawtooth' : 'triangle';
+    o.frequency.value = kind === 'current' ? 55 : 90 + Math.random() * 20;
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 320; f.Q.value = 4;
+    const g = ctx.createGain();
+    this._env(g, t, 0.02, gap * 0.9, kind === 'current' ? 0.05 : 0.07);
+    const p = this.panner(x, 1.6, z);
+    o.connect(f).connect(g).connect(p).connect(this.master);
+    o.start(t); o.stop(t + gap);
+  }
+
   // behind-the-player unexplained sound
   behindYou() {
     if (!this.ensure()) return;

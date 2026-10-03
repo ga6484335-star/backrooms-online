@@ -274,6 +274,117 @@ export function cacheHintFor(level) {
   return CACHE_HINTS[level] || CACHE_HINTS[0];
 }
 
+// ---------------------------------------------------------------------------
+// LEVEL HAZARDS — a bespoke, deterministic environmental hazard per level.
+//
+// Layered on top of the shared site loop so every level has a signature threat
+// the party must manage, not just nodes to touch. The hazard is *positional*:
+// each client derives the same active/inactive cell windows from (seed, level)
+// and evaluates them locally, so it needs no server state. Attacks are purely
+// local (the world hurt you); monsters remain host-authoritative.
+//
+// Placement rule: an active cell must never coincide with an objective site,
+// the exit, or the hidden cache, so the game can never become unwinnable. We
+// scan outward from the origin and reject reserved cells, which keeps the RNG
+// consumption order fixed across clients.
+export const HAZARDS = {
+  0: { kind: 'none' },
+  1: { kind: 'steam', label: 'LIVE STEAM', period: 6.0, warn: 2.2, onFor: 2.6, radius: 3, rings: 6 },
+  2: { kind: 'current', label: 'LIVE RAIL', period: 5.2, warn: 1.8, onFor: 1.8, radius: 4, rings: 6 },
+  3: { kind: 'flood', label: 'SURGE', period: 9.5, warn: 3.0, onFor: 3.0, radius: 3, rings: 5 },
+  4: { kind: 'malfunction', label: 'MALFUNCTION', period: 7.0, warn: 2.0, onFor: 2.4, radius: 3, rings: 5 },
+  5: { kind: 'lightsout', label: 'BLACKOUT', period: 16.0, warn: 3.0, onFor: 6.0, radius: 0, rings: 0 },
+  6: { kind: 'surge2', label: 'CASCADE', period: 5.6, warn: 1.6, onFor: 2.0, radius: 3, rings: 7 },
+};
+
+export function hazardFor(level) { return HAZARDS[level] || HAZARDS[0]; }
+
+// Deterministic active-hazard cells for a level. The candidate stream is
+// independent of site/exit/cache generation, so nothing here disturbs the
+// shared PRNG indices those rely on.
+export function hazardCells(world, level) {
+  const h = hazardFor(level);
+  if (!h.radius) return [];
+  const seed = world.seed >>> 0;
+  const rng = rngFrom(hashStr(seed, `haz:${level}`));
+  const reserved = new Set();
+  for (const s of objectiveSites(world, level)) reserved.add(`${s.cx},${s.cz}`);
+  const [ecx, ecz] = exitCellFor(world, level);
+  reserved.add(`${ecx},${ecz}`);
+  const cache = loreCacheFor(world, level);
+  reserved.add(`${cache.cx},${cache.cz}`);
+
+  const out = [];
+  const used = new Set();
+  const want = Math.max(1, h.rings);
+  for (let i = 0; i < want * 10 && out.length < want; i++) {
+    const ang = rng() * Math.PI * 2;
+    const rad = 8 + rng() * 22;
+    const cx = Math.round(Math.cos(ang) * rad);
+    const cz = Math.round(Math.sin(ang) * rad);
+    const key = `${cx},${cz}`;
+    if (used.has(key)) continue;
+    used.add(key);
+    if (reserved.has(key)) continue;
+    const cell = world.cellAt(cx, cz);
+    if (cell.special || cell.water) continue;
+    out.push([cx, cz]);
+  }
+  return out;
+}
+
+export function hazardKey(level, cx, cz) { return `haz:${level}:${cx},${cz}`; }
+
+// Pure function of (world, level, time): is the hazard active right now, and is
+// it in its warning window? The same clock (shared elapsed time) drives every
+// client, so a co-op party experiences the surge together.
+export function hazardPhase(world, level, t) {
+  const h = hazardFor(level);
+  if (h.kind === 'none') return { active: false, warn: false, label: null };
+  const p = h.period || 6;
+  const local = ((t % p) + p) % p;
+  const onFor = h.onFor || 2;
+  const activeStart = p - onFor;
+  const warnAt = Math.max(0, activeStart - (h.warn || 2));
+  return {
+    active: local >= activeStart,
+    warn: local >= warnAt && local < activeStart,
+    label: h.label,
+    remain: Math.max(0, activeStart - local),
+  };
+}
+
+// The hazard's damage: how much "exposure" per second an active cell deals.
+export const HAZARD_DPS = { steam: 0.34, current: 0.55, flood: 0.30, malfunction: 0.28, lightsout: 0, surge2: 0.5 };
+
+export function hazardDps(level) {
+  return HAZARD_DPS[hazardFor(level).kind] || 0;
+}
+
+// ---- loot: risk/reward pickups surfaced by the hazard ---------------------
+// Each hazard cell can hold a loot item. Its "kind" is a pure function of the
+// cell, and the lore/effect is chosen per level so the reward is story-flavoured.
+export function lootKindFor(level, cx, cz) {
+  const rng = rngFrom(hashStr((level + 1) >>> 0, `loot:${cx},${cz}`));
+  return rng() < 0.5 ? 'battery' : 'recorder';
+}
+
+export const LOOT = {
+  battery: {
+    label: 'SPARE CELL',
+    effect: 'battery',
+    body: 'A cold cell, still charged. The beam will hold a little longer.',
+  },
+  recorder: {
+    label: 'FIELD RECORDER',
+    effect: 'clue',
+    body: 'A palm recorder, running. It is a voice you know — yours — calmly describing a room '
+      + 'you have not reached yet. It knows what happens next. It will not say how it ends.',
+  },
+};
+
+export function lootFor(kind) { return LOOT[kind] || LOOT.battery; }
+
 // Co-op objective tracker. Holds only serializable state so it can be snapshotted
 // into the `obj` event and replayed for late joiners / reconnects.
 export class ObjectiveTracker {

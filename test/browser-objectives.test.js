@@ -186,20 +186,77 @@ async function main() {
     check(JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.objectives())`)).complete === true,
       'objectives report complete');
 
+    // level 5's signature hazard is the timed blackout (no cells, just darkness)
+    const hz5 = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.hazard())`));
+    check(hz5.kind === 'lightsout', `level 5 signature hazard is the blackout (${hz5.kind})`);
+    await cdp.eval(`window.__dbg.setElapsed(${16 - 6 + 0.4})`); // inside the active window
+    await sleep(400);
+    check(JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.hazard())`)).active === true,
+      'blackout goes active on its schedule');
+    await cdp.eval(`window.__dbg.setElapsed(0.2)`); // back to clear
+    await cdp.eval(`window.__dbg.skipCinematic()`);
+
     // now the exit advances the party to the story's next level (6)
     await cdp.eval(`window.__dbg.teleport(${exit.x}, ${exit.z})`);
     await sleep(1200);
     await cdp.eval(`window.__dbg.interact()`);
-    // an epilogue cinematic runs first; skip it so enterLevel executes
-    await sleep(1200);
+    // an epilogue cinematic runs first, then enterLevel(6) fires; tick it
+    // deterministically instead of racing setTimeout-driven skips
+    check((await cdp.eval(`window.__dbg.isHost()`)) === true, 'single player is host (can use the exit)');
+    await cdp.eval(`window.__dbg._tickCinematic(400, 0.2)`);
+    await sleep(600);
     await cdp.eval(`window.__dbg.skipCinematic()`);
-    await sleep(1200);
-    await cdp.eval(`window.__dbg.skipCinematic()`);
+    await cdp.eval(`window.__dbg._tickCinematic(400, 0.2)`);
     await sleep(1500);
     const level6 = await cdp.eval(`window.__dbg.level()`);
     check(level6 === 6, `exit advanced to LEVEL 6 — THE ASCENT (got ${level6})`);
     const back = await cdp.eval(`Boolean(document.querySelector('#objective-title')) && document.getElementById('objective-title').textContent`);
     check(/ASCENT/i.test(String(back)), `HUD reflects the new chapter (${back})`);
+
+    // ---- level signature hazards -----------------------------------------
+    // enterLevel(6) starts level 6's own transition; clear it so the per-frame
+    // hazard update runs (in a real session it ends on its own).
+    await cdp.eval(`window.__dbg.skipTransition()`);
+    await cdp.eval(`window.__dbg.skipCinematic()`);
+    await sleep(300);
+    check((await cdp.eval(`window.__dbg.state().gameState`)) === 'playing', 'control returns on level 6');
+
+    // level 6's hazard is the cascade: timed surge cells with loot on them
+    const hz6 = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.hazard())`));
+    check(hz6.kind === 'surge2', `level 6 signature hazard is the cascade (${hz6.kind})`);
+    const hcells = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.hazardPos())`));
+    check(hcells.length >= 1, `level 6 has hazard cells (${hcells.length})`);
+    const loot = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.lootPos())`));
+    check(loot.length >= 1 && String(loot[0].id).startsWith('loot:'), 'hazard cells hold risk/reward loot');
+
+    // loot is taken through the real interact path (and removed for the party)
+    await cdp.eval(`window.__dbg.teleport(${loot[0].x}, ${loot[0].z})`);
+    await sleep(1400);
+    const nearLoot = await cdp.eval(`(() => { const it = window.__dbg.nearInteractable(); return it ? it.type : null; })()`);
+    check(nearLoot === 'loot', `near hazard loot after teleport (${nearLoot})`);
+    const actedLoot = await cdp.eval(`window.__dbg.interact()`);
+    check(actedLoot === 'loot', `interact took the loot (${actedLoot})`);
+    check((await cdp.eval(`window.__dbg.lootTakenList()`)).length >= 1, 'loot recorded as taken for the party');
+    await cdp.eval(`window.__dbg.closeLore()`);
+    await cdp.eval(`window.__dbg.skipCinematic()`);
+
+    // standing in an active hazard cell steadily raises exposure. Cells can sit
+    // next to props, so try each until the player actually stands inside one.
+    let insideOK = false;
+    for (const hcell of hcells) {
+      await cdp.eval(`window.__dbg.teleport(${hcell.x}, ${hcell.z})`);
+      await sleep(500);
+      if ((await cdp.eval(`window.__dbg.hazard().inside`)) === true) { insideOK = true; break; }
+    }
+    check(insideOK === true, 'player can stand in a hazard cell');
+    await cdp.eval(`window.__dbg.setElapsed(${5.6 - 2.0 + 0.2})`); // just inside the active window
+    await cdp.eval(`window.__dbg.setExposure(0.15)`);
+    await sleep(700);
+    const hzIn = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.hazard())`));
+    check(hzIn.exposure > 0.15, `active surge raises exposure (${hzIn.exposure})`);
+    await cdp.eval(`window.__dbg.setElapsed(0.2)`);
+    await cdp.eval(`window.__dbg.setExposure(0)`);
+    await cdp.eval(`window.__dbg.skipCinematic()`);
 
     // ---- the finale -------------------------------------------------------
     await cdp.eval(`window.__dbg.completeObjectives()`);

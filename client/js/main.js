@@ -21,7 +21,8 @@ import { MenuUI } from './menu.js';
 import { Flashlight } from './flashlight.js';
 import { noteText } from './notes.js';
 import { getLevel } from './levels.js';
-import { ObjectiveTracker, objectiveSites, exitCellFor, loreCacheFor, cacheHintFor } from './objectives.js';
+import { materialsFor } from './materials.js';
+import { ObjectiveTracker, objectiveSites, exitCellFor, loreCacheFor, cacheHintFor, hazardFor, hazardCells, hazardPhase, hazardDps, lootKindFor } from './objectives.js';
 import { introFor, epilogueFor, beatFor, ambientFor, radioFor, nextStoryLevel, isFinalLevel, levelTitle } from './story.js';
 import { EndingSequence } from './ending.js';
 import { OpeningSequence } from './opening.js';
@@ -80,6 +81,18 @@ let ambientStoryIdx = 0;    // rotating ambient story pool index
 let radioIdx = 0;           // rotating radio line index
 let cachesFound = new Set(); // lore cache keys the party has opened (relayed)
 let cacheHintShown = new Set(); // levels whose hidden-room clue has been teased
+let hazardCellsSet = new Set(); // "cx,cz" hazard cells for the current level
+let exposure = 0;               // standing hazard exposure (0..1) -> drains
+let hazardState = { active: false, warn: false, inside: false, label: null };
+let lootTaken = 0;              // loot items recovered this run (HUD/debug)
+let lootTakenKeys = new Set();  // loot interactable ids already taken (relayed)
+
+// ---- level hazard helper: the shared blackout material for level 5 --------
+function panelMaterial() {
+  if (!world) return null;
+  const mats = materialsFor(getLevel(world.level), world.seed, 1);
+  return mats.lightPanel || null;
+}
 
 // ---------------------------------------------------------------------------
 // reconnection state
@@ -300,6 +313,16 @@ net.on('ev', (m) => {
       }
       break;
     }
+    case 'loot': {
+      // a peer took a hazard-cell pickup — remove it here too so the co-op
+      // party cannot double-collect the same risk/reward item
+      if (m.data && m.data.id && !lootTakenKeys.has(m.data.id)) {
+        lootTakenKeys.add(m.data.id);
+        if (worldMgr) worldMgr.removeInteractable(m.data.id);
+        if (m.data.kind === 'recorder') flashText('SOMEONE PICKED UP A RECORDER.');
+      }
+      break;
+    }
     case 'caught': {
       // someone was caught — if it was us, death flow runs locally via onCaught
       if (m.data.pid === -1 || m.data.pid === net.id) {
@@ -462,6 +485,9 @@ function applyWorldReplay(m) {
       // replay: mark pre-existing discoveries found so late joiners see the
       // cache already opened rather than re-rewarding it
       cachesFound.add(ev.data.key);
+    } else if (ev.kind === 'loot' && ev.data.id) {
+      lootTakenKeys.add(ev.data.id);
+      if (worldMgr) worldMgr.removeInteractable(ev.data.id);
     }
   }
   if (objectives && objectives.isComplete()) unlockExit();
@@ -515,6 +541,9 @@ function startGame(seed, level, opts = {}) {
   respawnT = 0;
   doorToggles = new Map();
   keyInventory = new Set();
+  exposure = 0; lootTaken = 0;
+  lootTakenKeys = new Set();
+  hazardCellsSet = new Set((hazardCells(world, level) || []).map(([cx, cz]) => `${cx},${cz}`));
 
   monsters.onNearCallback = (m, d) => {
     player.trauma(Math.max(0, 1 - d / 6) * 0.4);
@@ -791,6 +820,9 @@ function enterLevel(level) {
   keyInventory = new Set();
   objectives = new ObjectiveTracker(level);
   exitUnlocked = false;
+  exposure = 0; lootTaken = 0;
+  lootTakenKeys = new Set();
+  hazardCellsSet = new Set((hazardCells(world, level) || []).map(([cx, cz]) => `${cx},${cz}`));
   monsters.director.level = level;
   const levelDef = getLevel(level);
   scene.fog = new THREE.FogExp2(levelDef.palette.fog, levelDef.palette.fogDensity);
@@ -823,6 +855,7 @@ function findInteractable() {
     player.pos.x, player.pos.z,
     (key) => (objectives && objectives.activated.has(key))
       || (key.startsWith('cache:') && cachesFound.has(key))
+      || (key.startsWith('loot:') && lootTakenKeys.has(key))
       || (key.startsWith('exit:') && !exitUnlocked),
   );
   return it;
@@ -847,6 +880,8 @@ function doInteract() {
     activateSite(it.data);
   } else if (it.type === 'cache') {
     openLoreCache(it.data);
+  } else if (it.type === 'loot') {
+    takeLoot(it.data);
   } else if (it.type === 'exit') {
     useExit(it.data);
   } else if (it.type === 'battery') {
@@ -945,6 +980,138 @@ function onSiteActivated(site, beatIdx, remote) {
   }
 }
 
+// ---- level hazards: per-level signature threat mechanics -------------------
+// The hazard is positional and deterministic. Each client evaluates the same
+// warning/active windows from the shared elapsed time, so a co-op party faces
+// the surge together. Damage is local (the world hurts you); monsters remain
+// host-authoritative. Level 5's blackout specially dims the shared light-panel
+// material so the whole level reads as plunged into darkness.
+function updateHazard(dt, elapsed) {
+  if (!world) return;
+  const level = world.level;
+  const hz = hazardFor(level);
+  hazardState.label = hz.label || null;
+  if (hz.kind === 'none') {
+    hazardState.active = hazardState.warn = hazardState.inside = false;
+    setHazardPanelOpacity(1);
+    return;
+  }
+  const phase = hazardPhase(world, level, elapsed);
+  const cx = Math.floor(player.pos.x / CELL), cz = Math.floor(player.pos.z / CELL);
+  const inside = hazardCellsSet.has(`${cx},${cz}`);
+
+  // avoid re-flashing the same warning every frame while standing in a cell
+  const wasWarn = hazardState.warn;
+  hazardState.active = phase.active;
+  hazardState.warn = phase.warn;
+  hazardState.inside = inside && !dead;
+
+  // UI: only warn while the player is actually near a hazard cell (or in one)
+  const near = inside || hazardCellNear(player.pos.x, player.pos.z, 4);
+  updateHazardHud(near, phase, hz);
+
+  // the floor sheets glow while the hazard is charged, pulse during the
+  // warning, and fade out between surges — same for every client (shared clock)
+  updateHazardFloors(hz, phase, dt);
+
+  // level 5 blackout: dim the shared panel material for everyone
+  if (hz.kind === 'lightsout') {
+    setHazardPanelOpacity(phase.active ? 0.08 : 1);
+  }
+
+  if (dead) { exposure = Math.max(0, exposure - dt * 0.15); return; }
+
+  if (inside && phase.active) {
+    const dps = hazardDps(level);
+    exposure = Math.min(1, exposure + dps * dt);
+    player.trauma(Math.min(1, 0.25 + exposure * 0.6));
+    addHazardOverlay(hz.kind, dt);
+    audio.hazardLoop && audio.hazardLoop(hz.kind, player.pos.x, player.pos.z);
+    if (exposure >= 1) {
+      exposure = 0;
+      flashText('THE ' + (hz.label || 'LEVEL') + ' TOOK YOU');
+      engine.bumpGlitch(2.6);
+      audio.heartbeat(1);
+      if (monsters) monsters.escalate(1);
+      localDeath();
+    }
+  } else {
+    exposure = Math.max(0, exposure - dt * 0.15);
+    clearHazardOverlay();
+  }
+  // beat the surge: if the player was warned and got clear, reward with calm
+  if (wasWarn && !inside && !phase.active && exposure === 0) {
+    hazardCalm = 0.6;
+  }
+}
+
+let hazardCalm = 0;
+let hazardOverlayT = 0;
+function addHazardOverlay(kind, dt) {
+  hazardOverlayT += dt;
+  E('hazard-overlay') && E('hazard-overlay').classList.remove('hidden');
+  const el = E('hazard-overlay');
+  if (el) el.style.opacity = String(Math.min(0.55, 0.18 + exposure * 0.5));
+}
+function clearHazardOverlay() {
+  hazardOverlayT = 0;
+  const el = E('hazard-overlay');
+  if (el) el.classList.add('hidden');
+}
+
+function setHazardPanelOpacity(v) {
+  const lp = panelMaterial();
+  if (lp && lp.opacity !== v) lp.opacity = v;
+}
+
+// glow the floor sheets under each hazard cell. Warning = slow blue/amber pulse
+// rising; active = full bright; clear = fade out.
+let hazardVisT = 0;
+let _hazardHot = null;
+function updateHazardFloors(hz, phase, dt = 1 / 60) {
+  if (!worldMgr || hz.kind === 'none') return;
+  hazardVisT += dt;
+  if (!_hazardHot) _hazardHot = new THREE.Color(0xffd9a0);
+  let target;
+  if (phase.active) target = 0.5;
+  else if (phase.warn) target = 0.14 + Math.abs(Math.sin(hazardVisT * 4)) * 0.22;
+  else target = 0;
+  const color = hz.kind === 'current' ? 0x2a6cff : 0xb04a1a;
+  for (const chunk of worldMgr.chunks.values()) {
+    const g = chunk.hazards;
+    if (!g) continue;
+    for (const q of g.children) {
+      if (!q.userData.hazard) continue;
+      const m = q.material;
+      m.opacity += (target - m.opacity) * 0.15;
+      m.color.setHex(color);
+      if (phase.active) m.color.lerp(_hazardHot, 0.18);
+    }
+  }
+}
+
+function hazardCellNear(px, pz, cells) {
+  const cx = Math.floor(px / CELL), cz = Math.floor(pz / CELL);
+  for (let dz = -cells; dz <= cells; dz++) {
+    for (let dx = -cells; dx <= cells; dx++) {
+      if (hazardCellsSet.has(`${cx + dx},${cz + dz}`)) return true;
+    }
+  }
+  return false;
+}
+
+function updateHazardHud(near, phase, hz) {
+  const box = E('hazard-hud');
+  if (!box) return;
+  if (!near || hz.kind === 'none') { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  const label = E('hazard-label');
+  const t = E('hazard-time');
+  if (label) label.textContent = hz.label || '';
+  if (phase.active) { box.classList.add('danger'); if (t) t.textContent = 'ACTIVE'; }
+  else { box.classList.remove('danger'); if (t) t.textContent = phase.warn ? `SURGE IN ${Math.ceil(phase.remain)}s` : 'CLEAR'; }
+}
+
 function unlockExit() {
   if (exitUnlocked) return;
   exitUnlocked = true;
@@ -1001,6 +1168,27 @@ function closeLore() {
   if (voice) voice.stop();
   audio.paper();
   if (player.mobile && mobile) mobile.show();
+}
+
+// ---- loot: risk/reward pickups left on hazard cells ------------------------
+// Taking one is relayed (so co-op players don't fight over the same item) and
+// either recharges the flashlight or reveals a story clue via the lore overlay.
+function takeLoot(it) {
+  if (!it || !it.id || lootTakenKeys.has(it.id)) return;
+  lootTakenKeys.add(it.id);
+  lootTaken++;
+  net.sendEvent('loot', { id: it.id, kind: it.lootKind, level: world ? world.level : 0 });
+  if (worldMgr) worldMgr.removeInteractable(it.id);
+  audio.keyPick();
+  if (it.effect === 'battery') {
+    if (flash) flash.addBattery();
+    flashText('SPARE CELL — BEAM RECHARGED');
+    audio.buzz(it.x, it.z, 0.5);
+  } else {
+    // a recorder: the clue reads out in the same overlay as a lore cache
+    showLore({ label: it.label || 'FIELD RECORDER', lore: it.lore });
+  }
+  if (hazardState.inside) flashText('YOU STOPPED FOR THAT.');
 }
 
 // ---- exit gate: advance the whole party together ----------------------------
@@ -1651,6 +1839,9 @@ function loop() {
     }
   }
 
+  // level signature hazard: warning -> active windows for this level
+  updateHazard(dt, (now - startTime) / 1000);
+
   // objective guidance: a compass to the next goal (throttled to ~5Hz)
   lastCompass += dt;
   if (lastCompass > 0.2) { lastCompass = 0; updateObjectiveCompass(dt); }
@@ -1683,6 +1874,7 @@ function loop() {
       : currentInteract.type === 'key' ? 'TAKE RUSTY KEY'
       : currentInteract.type === 'site' ? 'ACTIVATE INTAKE NODE'
       : currentInteract.type === 'cache' ? `OPEN ${(currentInteract.data.label || 'ARCHIVE').toUpperCase()}`
+      : currentInteract.type === 'loot' ? `TAKE ${(currentInteract.data.label || 'PICKUP').toUpperCase()}`
       : currentInteract.type === 'exit' ? (exitUnlocked ? 'ENTER THE EXIT' : 'SEALED — OBJECTIVES REMAIN')
       : doorPromptText(currentInteract.data);
   } else {
@@ -1752,6 +1944,12 @@ function leaveToMenu() {
   exitUnlocked = false;
   cachesFound = new Set();
   cacheHintShown = new Set();
+  hazardCellsSet = new Set();
+  exposure = 0;
+  lootTaken = 0;
+  lootTakenKeys = new Set();
+  hazardState = { active: false, warn: false, inside: false, label: null };
+  if (world) { const lp = panelMaterial(); if (lp) lp.opacity = 1; }
   E('lore-overlay') && E('lore-overlay').classList.add('hidden');
   // re-arm the cold open for the next fresh session
   openingDone = false;
@@ -1806,6 +2004,28 @@ window.__dbg = {
     return { key: c.key, cx: c.cx, cz: c.cz, x: c.x, z: c.z, label: c.label, room: c.room, lore: c.lore };
   },
   cacheFound: () => [...cachesFound],
+  hazard: () => ({
+    kind: hazardFor(world ? world.level : 0).kind,
+    label: hazardState.label,
+    active: hazardState.active,
+    warn: hazardState.warn,
+    inside: hazardState.inside,
+    exposure: +exposure.toFixed(3),
+    lootTaken,
+    dead,
+    cells: hazardCellsSet.size,
+    cellKey: world ? `${Math.floor(player.pos.x / 4)},${Math.floor(player.pos.z / 4)}` : null,
+  }),
+  hazardPos: () => (world ? hazardCells(world, world.level).map(([cx, cz]) => ({ cx, cz, x: (cx + 0.5) * 4, z: (cz + 0.5) * 4 })) : []),
+  hazardAt: (t) => (world ? hazardPhase(world, world.level, t) : null),
+  lootPos: () => (world ? hazardCells(world, world.level).map(([cx, cz]) => ({
+    id: `loot:${world.level}:${cx},${cz}`,
+    cx, cz, x: (cx + 0.5) * 4, z: (cz + 0.5) * 4,
+    kind: lootKindFor(world.level, cx, cz),
+  })) : []),
+  lootTakenList: () => [...lootTakenKeys],
+  setExposure: (v) => { exposure = Math.max(0, Math.min(1, v)); },
+  setElapsed: (v) => { startTime = performance.now() - v * 1000; },
   loreOpen: () => loreOverlayOpen,
   loreShown: () => (loreOverlayOpen ? { title: E('lore-title') ? E('lore-title').textContent : null, body: E('lore-body') ? E('lore-body').textContent : null } : null),
   openCache: () => {
@@ -1939,6 +2159,8 @@ window.__dbg = {
   })) : []),
   keys: () => [...keyInventory],
   interact: () => { currentInteract = findInteractable(); doInteract(); return currentInteract ? currentInteract.type : null; },
+  isHost: () => isHost,
+  _tickCinematic: (n, dt) => { for (let i = 0; i < n && cinematic; i++) updateCinematic(dt); },
   prompt: () => (E('interact-text') ? E('interact-text').textContent : null),
   nearInteractable: () => findInteractable(),
   placedNotes: () => {

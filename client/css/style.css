@@ -397,6 +397,29 @@ body {
 }
 #objective-compass.near #oc-arrow { color: #7fbf7f; }
 
+/* ---------------- level signature hazard HUD ---------------- */
+#hazard-hud {
+  position: absolute; top: 64px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 12px; align-items: center;
+  padding: 4px 12px; border: 1px solid rgba(255,150,90,.45);
+  background: rgba(20,8,4,.55); border-radius: 2px;
+  font-family: 'Courier New', monospace; font-size: 11px; letter-spacing: 2px;
+  color: rgba(255,190,140,.9); text-shadow: 0 0 8px rgba(255,120,60,.5);
+  pointer-events: none; z-index: 40;
+}
+#hazard-hud.hidden { display: none; }
+#hazard-hud.danger { border-color: rgba(255,70,50,.9); color: #ffd0c0;
+  animation: hazardPulse .5s infinite alternate; }
+#hazard-time { color: #ffcb6b; }
+@keyframes hazardPulse { from { background: rgba(40,8,4,.55); } to { background: rgba(120,20,10,.7); } }
+
+#hazard-overlay {
+  position: fixed; inset: 0; z-index: 60; pointer-events: none;
+  opacity: 0; transition: opacity .25s ease;
+  background: radial-gradient(circle at 50% 60%, rgba(255,90,40,.28) 0%, rgba(120,10,0,.5) 70%, rgba(60,0,0,.7) 100%);
+}
+#hazard-overlay.hidden { display: none; }
+
 /* ---------------- opening (cold open) ---------------- */
 #opening-overlay { position: fixed; inset: 0; z-index: 89; pointer-events: none; }
 .opening-card {

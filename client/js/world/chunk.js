@@ -8,7 +8,7 @@ import { GeoBuilder, PROP_BUILDERS } from '../props.js';
 import { hashStr, rngFrom, chance, range, intRange } from '../rng.js';
 import { getLevel } from '../levels.js';
 import { materialsFor } from '../materials.js';
-import { objectiveSites, exitCellFor, loreCacheFor } from '../objectives.js';
+import { objectiveSites, exitCellFor, loreCacheFor, hazardFor, hazardCells, lootKindFor, lootFor } from '../objectives.js';
 
 // door leaf materials (cached per level): aged painted wood / metal handle
 const doorMatCache = new Map();
@@ -352,6 +352,51 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
     em.name = 'lightpanels';
     group.add(em);
   }
+
+  // ---- level hazard geometry: a slow "wet floor" sheet under every hazard
+  // cell. main.js raises its opacity per-frame only while the hazard is active.
+  const hazardGroup = new THREE.Group();
+  hazardGroup.name = 'hazards';
+  hazardGroup.userData.kind = hazardFor(level).kind;
+  let hazardCountHere = 0;
+  {
+    const hz = hazardFor(level);
+    if (hz.kind !== 'none') {
+      for (const [cx, cz] of hazardCells(world, level)) {
+        if (Math.floor(cx / CELLS_PER_CHUNK) !== chunkX) continue;
+        if (Math.floor(cz / CELLS_PER_CHUNK) !== chunkZ) continue;
+        const hx = (cx + 0.5) * CELL, hzz = (cz + 0.5) * CELL;
+        const quad = new THREE.Mesh(
+          new THREE.PlaneGeometry(2.5, 2.5),
+          new THREE.MeshBasicMaterial({ color: hz.kind === 'current' ? 0x2a6cff : 0xb04a1a,
+            transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }),
+        );
+        quad.rotation.x = -Math.PI / 2;
+        quad.position.set(hx, 0.06, hzz);
+        quad.renderOrder = 3;
+        quad.userData.hazard = true;
+        hazardGroup.add(quad);
+        hazardCountHere++;
+
+        // risk/reward loot sitting ON the hazard cell — you must time the surge
+        const lootKind = lootKindFor(level, cx, cz);
+        const loot = lootFor(lootKind);
+        const crate = new THREE.Mesh(
+          new THREE.BoxGeometry(0.34, 0.34, 0.34),
+          new THREE.MeshBasicMaterial({ color: lootKind === 'recorder' ? 0x66e0c0 : 0xffd35a }),
+        );
+        crate.position.set(hx, 0.45, hzz);
+        crate.renderOrder = 2;
+        hazardGroup.add(crate);
+        const lootId = `loot:${level}:${cx},${cz}`;
+        crate.name = `lootmesh:${lootId}`;
+        notes.push({ x: hx, z: hzz, id: lootId, loot: true });
+        interactables.push({ kind: 'loot', key: lootId, id: lootId, cx, cz, x: hx, z: hzz,
+          lootKind, label: loot.label, lore: { title: loot.label, body: loot.body }, effect: loot.effect });
+      }
+    }
+  }
+  if (hazardCountHere) group.add(hazardGroup);
 
   // ---- progression interactables: objective sites + the level exit gate.
   // Placement is a pure function of (seed, level) via objectives.js, so every
@@ -721,6 +766,7 @@ export class WorldManager {
       notes: group.userData.notes,
       interactables: group.userData.interactables || [],
       lightMesh: group.getObjectByName('lightpanels'),
+      hazards: group.getObjectByName('hazards'),
     });
     for (const d of group.userData.doors) this.doorIndex.set(`${d.cx},${d.cz},${d.dir}`, d);
     // flush queued morphs for this chunk
@@ -792,7 +838,11 @@ export class WorldManager {
   removeInteractable(id) {
     for (const chunk of this.chunks.values()) {
       const i = chunk.notes.findIndex((n) => n.id === id);
-      if (i >= 0) { chunk.notes.splice(i, 1); return true; }
+      if (i >= 0) chunk.notes.splice(i, 1);
+      // loot also has a crate mesh — hide it so the pickup visibly vanishes
+      const m = chunk.group.getObjectByName(`lootmesh:${id}`);
+      if (m) m.visible = false;
+      if (i >= 0 || m) return true;
     }
     return false;
   }

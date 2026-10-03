@@ -7,6 +7,7 @@ import {
   objectiveSites, exitCellFor, ObjectiveTracker,
   CACHE_PLANS, cachePlanFor, cacheCellFor, anyCacheCellFor, cacheKey,
   loreCacheFor, loreFor, LORE, LORE_TRUTH, cacheHintFor, CACHE_HINTS,
+  hazardFor, hazardCells, hazardPhase, hazardDps, lootKindFor, lootFor, HAZARDS,
 } from '../client/js/objectives.js';
 import {
   STORY, ENDING, LEVEL_ORDER, FINAL_LEVEL, storyFor, introFor, epilogueFor,
@@ -219,6 +220,77 @@ console.log('\nhidden lore caches');
   const c = loreCacheFor(w, 0);
   if (c.room) check(!!w.specialAt(c.cx, c.cz), `cache sits inside its generated special room (${c.room})`);
   else check(true, 'cache fell back to a highway cell (no planned room in range)');
+}
+
+// ---------------------------------------------------------------------------
+console.log('\nlevel signature hazards');
+for (const lv of LEVELS) {
+  const h = hazardFor(lv);
+  check(!!h && typeof h.kind === 'string', `level ${lv}: hazard has a kind`);
+  if (h.kind !== 'none') {
+    check(typeof h.label === 'string' && h.label.length > 0, `level ${lv}: hazard is labelled (${h.label})`);
+    check(h.period > 0 && h.onFor > 0 && h.warn > 0, `level ${lv}: hazard has warn/active windows`);
+    check(hazardDps(lv) >= 0, `level ${lv}: hazard dps is non-negative`);
+  }
+}
+check(hazardFor(99).kind === 'none', 'unknown level has no hazard');
+
+for (const lv of LEVELS) {
+  const w = new WorldModel(2468, lv);
+  const a = hazardCells(w, lv);
+  const b = hazardCells(new WorldModel(2468, lv), lv);
+  check(JSON.stringify(a) === JSON.stringify(b), `level ${lv}: hazard cells are deterministic`);
+  const h = hazardFor(lv);
+  if (h.kind !== 'none' && h.radius > 0) {
+    check(a.length >= 1, `level ${lv}: hazard has active cells`);
+    // never on top of an objective, the exit, or the cache
+    const reserved = new Set();
+    for (const s of objectiveSites(w, lv)) reserved.add(`${s.cx},${s.cz}`);
+    const [ecx, ecz] = exitCellFor(w, lv);
+    reserved.add(`${ecx},${ecz}`);
+    const cc = loreCacheFor(w, lv);
+    reserved.add(`${cc.cx},${cc.cz}`);
+    check(a.every(([cx, cz]) => !reserved.has(`${cx},${cz}`)), `level ${lv}: hazard never blocks objectives/exit/cache`);
+    check(a.every(([cx, cz]) => { const cell = w.cellAt(cx, cz); return !cell.special && !cell.water; }),
+      `level ${lv}: hazard cells are ordinary, dry cells`);
+  } else if (h.kind === 'none') {
+    check(a.length === 0, `level ${lv}: no hazard cells on a hazard-free level`);
+  }
+}
+
+// hazard windows are a pure function of the shared clock
+{
+  const w = new WorldModel(7, 1);
+  const p0 = hazardPhase(w, 1, 0);
+  check(p0.label === hazardFor(1).label, 'hazard phase carries the level label');
+  let sawActive = false, sawWarn = false;
+  for (let t = 0; t < hazardFor(1).period * 3; t += 0.1) {
+    const p = hazardPhase(w, 1, t);
+    if (p.active) sawActive = true;
+    if (p.warn) sawWarn = true;
+  }
+  check(sawActive && sawWarn, 'hazard cycles through warn and active windows');
+  check(hazardPhase(w, 1, 1e9).label === hazardFor(1).label, 'hazard phase is stable at large t');
+  const t2 = hazardFor(1).period * 100 + 0.05;
+  check(JSON.stringify(hazardPhase(w, 1, t2)) === JSON.stringify(hazardPhase(w, 1, t2)), 'hazard phase is pure');
+}
+
+console.log('\nhazard loot (risk / reward)');
+{
+  const kinds = new Set();
+  for (const lv of LEVELS) {
+    for (let cx = -8; cx <= 8; cx += 3) {
+      for (let cz = -8; cz <= 8; cz += 3) {
+        const k = lootKindFor(lv, cx, cz);
+        kinds.add(k);
+        check(lootKindFor(lv, cx, cz) === k, `level ${lv}: loot kind is deterministic at ${cx},${cz}`);
+        const l = lootFor(k);
+        check(!!l.label && !!l.body && !!l.effect, `level ${lv}: loot ${k} has label/body/effect`);
+      }
+    }
+  }
+  check(kinds.has('battery') && kinds.has('recorder'), 'loot pool includes both batteries and recorders');
+  check(lootFor('nope') === lootFor('battery'), 'unknown loot falls back to battery');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
