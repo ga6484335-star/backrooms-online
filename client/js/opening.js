@@ -72,6 +72,8 @@ export class OpeningSequence {
     this._buildStreet();
     this._buildBody();
     this._buildStreaks();
+    this._buildEnvironment();
+    this._stepAcc = 0;
     this._enterPhase(0, true);
   }
 
@@ -222,6 +224,68 @@ export class OpeningSequence {
     }
   }
 
+  // living world: drizzle, exhaled breath, swaying tree canopies, drifting mist.
+  // All parented to the surface set (or the camera) so they read during the
+  // street shots and vanish with the fall.
+  _buildEnvironment() {
+    const G = this.group;
+
+    // drizzle — a column of short falling streaks around the walker
+    this._rain = [];
+    const rainMat = new THREE.MeshBasicMaterial({ color: 0xaab8c8, transparent: true, opacity: 0, fog: false });
+    for (let i = 0; i < 90; i++) {
+      const r = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.5 + Math.random() * 0.5, 0.008), rainMat);
+      r.position.set((Math.random() - 0.5) * 26, Math.random() * 14, (Math.random() - 0.5) * 26);
+      G.add(r);
+      this._rain.push(r);
+    }
+    this._rainMat = rainMat;
+
+    // tree canopies, black against the sky, gently swaying
+    const treeMat = new THREE.MeshStandardMaterial({ color: 0x070a08, roughness: 1 });
+    this._trees = [];
+    for (let i = 0; i < 16; i++) {
+      const side = i % 2 ? 1 : -1;
+      const z = -14 - i * 11 - (i % 3) * 3;
+      const t = new THREE.Mesh(new THREE.SphereGeometry(1.6 + (i % 4) * 0.4, 8, 6), treeMat);
+      t.position.set(side * (8.4 + (i % 3) * 0.6), 4.4, z);
+      t.scale.y = 0.8;
+      G.add(t);
+      this._trees.push({ m: t, phase: i * 0.7 });
+    }
+
+    // drifting ground mist — low translucent sheets that creep across the road
+    const mistMat = new THREE.MeshBasicMaterial({ color: 0x2a3340, transparent: true, opacity: 0, fog: false, depthWrite: false });
+    this._mist = [];
+    for (let i = 0; i < 7; i++) {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(40, 8), mistMat);
+      m.rotation.x = -Math.PI / 2;
+      m.position.set((Math.random() - 0.5) * 6, 0.4 + Math.random() * 0.5, -10 - i * 22);
+      G.add(m);
+      this._mist.push({ m, z0: m.position.z, phase: Math.random() * 6 });
+    }
+    this._mistMat = mistMat;
+
+    // exhaled breath — two soft puffs in front of the lens, on the cold shots
+    const breathMat = new THREE.MeshBasicMaterial({ color: 0x9fb0c0, transparent: true, opacity: 0, fog: false, depthWrite: false });
+    this._breath = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.35), breathMat);
+    this._breath.position.set(0.16, -0.16, -0.7);
+    this.camera.add(this._breath);
+    this._breathMat = breathMat;
+    this._breathT = 0;
+  }
+
+  // deterministic footfalls: a step every 0.62 s while actually walking
+  _tickSteps(dt, amount) {
+    if (amount <= 0.01) { this._stepAcc = 0.4; return; }
+    this._stepAcc += dt;
+    const interval = 0.62 / Math.max(0.4, amount);
+    if (this._stepAcc >= interval) {
+      this._stepAcc = 0;
+      if (this.audio && this.audio.footstep) this.audio.footstep('concrete', amount > 0.8, 0, 0, 0, 0.4);
+    }
+  }
+
   // -------------------------------------------------------------- phase logic
   _enterPhase(i, first = false) {
     const p = this.phases[i];
@@ -307,6 +371,7 @@ export class OpeningSequence {
 
     this._animateCamera(dt);
     this._tickEnvironment(dt);
+    this._tickSteps(dt, this._walkAmount || 0);
 
     if (this.t >= p.dur && this.phaseIdx < this.phases.length - 1) {
       this._enterPhase(this.phaseIdx + 1);
@@ -388,6 +453,49 @@ export class OpeningSequence {
       this._amb.intensity += (lk.ambI - this._amb.intensity) * k;
     }
 
+    // --- living environment (surface only) ---
+    const surface = lk.surface || lk.streak;
+    // drizzle falls and wraps around the walker
+    if (this._rain) {
+      const op = lk.surface ? 0.16 : 0;
+      this._rainMat.opacity += (op - this._rainMat.opacity) * k;
+      if (lk.surface) {
+        const cz = this.camera.position.z, cx = this.camera.position.x;
+        for (const r of this._rain) {
+          r.position.y -= dt * 6.5;
+          if (r.position.y < 0) { r.position.y = 14; r.position.z = cz + (Math.random() - 0.5) * 26; r.position.x = cx + (Math.random() - 0.5) * 26; }
+        }
+      }
+    }
+    // canopies breathe with the wind
+    if (this._trees) {
+      for (const T of this._trees) {
+        T.m.rotation.z = Math.sin(this.T * 0.7 + T.phase) * 0.03 * (this._look.surface ? 1 : 0);
+      }
+    }
+    // ground mist creeps slowly sideways and thins in the distance
+    if (this._mist) {
+      const op = lk.surface ? (this.phases[this.phaseIdx].key === 'wrong' || this.phases[this.phaseIdx].key === 'stare' ? 0.09 : 0.045) : 0;
+      this._mistMat.opacity += (op - this._mistMat.opacity) * k;
+      if (lk.surface) {
+        for (const M of this._mist) {
+          M.m.position.x = Math.sin(this.T * 0.12 + M.phase) * 3.5;
+          M.m.position.z = M.z0 + Math.cos(this.T * 0.08 + M.phase) * 2.5;
+        }
+      }
+    }
+    // cold exhaled breath puffs on the uneasy/dread shots
+    if (this._breath) {
+      const key2 = this.phases[this.phaseIdx].key;
+      const cold = key2 === 'wrong' || key2 === 'stare' || key2 === 'crack';
+      this._breathT += dt;
+      const puff = Math.max(0, Math.sin(this._breathT * 1.3)) ** 3;
+      const op = cold && lk.surface ? 0.06 + puff * 0.16 : 0;
+      this._breathMat.opacity += (op - this._breathMat.opacity) * (1 - Math.pow(0.08, dt));
+      this._breath.scale.setScalar(0.9 + puff * 0.5);
+    }
+    void surface;
+
     // the REC dot blinks; the body reads during surface shots and the fall
     if (this._recDot) this._recDot.visible = Math.sin(this.T * 2.2) > -0.2;
     if (this.body) this.body.visible = lk.surface || lk.streak;
@@ -446,12 +554,18 @@ export class OpeningSequence {
         break;
       }
       case 'fall': {
-        // descend from the high street set into the real corridors
+        // descend from the high street set into the real corridors. The drop
+        // accelerates (free-fall) then decelerates at the very end as the
+        // Backrooms "catch" the walker — a longer, more physical plunge.
         const p = Math.min(1, this.t / this.phases[this.phaseIdx].dur);
-        const ease = p * p * (3 - 2 * p);
+        const accel = p * p;                       // speeding up
+        const brake = p > 0.78 ? 1 - Math.pow((p - 0.78) / 0.22, 2) * 0.85 : 1;
+        const ease = Math.min(1, accel * brake + p * 0.15);
         const y = (oy + 1.2) * (1 - ease) + 1.2 * ease;
-        cam.position.set(Math.sin(this.t * 1.3) * 1.5, y, -30 + Math.sin(this.t * 0.7) * 2);
-        cam.rotation.set(this.t * 2.6, this.t * 1.7, this.t * 3.1);
+        const spin = Math.min(1, p * 1.4);
+        cam.position.set(Math.sin(this.t * 1.3) * (1.5 + spin), y, -30 + Math.sin(this.t * 0.7) * 2);
+        cam.rotation.set(this.t * 2.6, this.t * 1.7, this.t * 3.1 * (0.5 + spin));
+        if (this.engine && this.engine.bumpGlitch) this.engine.bumpGlitch(1.0 + p);
         this._swingLegs(0);
         break;
       }
@@ -479,6 +593,7 @@ export class OpeningSequence {
   }
 
   _swingLegs(amount) {
+    this._walkAmount = amount;
     if (!this._legL) return;
     const s = Math.sin(this.T * 5.4) * 0.5 * amount;
     this._legL.rotation.x = s;
@@ -493,6 +608,11 @@ export class OpeningSequence {
       m.geometry.dispose(); m.material.dispose();
     }
     this._streaks = [];
+    if (this._breath && this.camera) {
+      this.camera.remove(this._breath);
+      this._breath.geometry.dispose(); this._breath.material.dispose();
+      this._breath = null;
+    }
     if (this.camera) this.camera.fov = this._baseFov;
     if (this.body) { this.camera.remove(this.body); this.body.traverse((o) => { if (o.isMesh) { o.geometry.dispose(); if (o.material && o.material.dispose) o.material.dispose(); } }); }
     this.scene.remove(this.group);

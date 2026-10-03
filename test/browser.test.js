@@ -296,25 +296,54 @@ async function main() {
     check(autoStand === true, 'walking auto-stands from sit');
 
     // 12. JUMP: grounded → airborne → lands; Space mid-air must NOT double height
-    const jumpTest = await cdp.eval(`(async () => {
+    // Physics is stepped deterministically (rAF/fixed-timestep integration is
+    // unreliable in headless, which previously made this assertion flaky).
+    const jumpTest = await cdp.eval(`(() => {
       const s0 = window.__dbg.state();
       if (!s0.grounded) return { ok: false, why: 'not grounded at start' };
       window.dispatchEvent(new KeyboardEvent('keydown', {code:'Space'}));
       let maxY = 0, airborne = false;
-      for (let i = 0; i < 12; i++) {
-        await new Promise(r => setTimeout(r, 70));
+      for (let i = 0; i < 60; i++) {
+        window.__dbg.step(0.02);
         const s = window.__dbg.state();
         if (!s.grounded) airborne = true;
         if (s.yOff > maxY) maxY = s.yOff;
-        if (i === 2) window.dispatchEvent(new KeyboardEvent('keydown', {code:'Space'})); // mid-air: must be ignored
+        if (i === 4) window.dispatchEvent(new KeyboardEvent('keydown', {code:'Space'})); // mid-air: must be ignored
       }
-      await new Promise(r => setTimeout(r, 700));
       const end = window.__dbg.state();
       const landed = end.grounded && end.yOff === 0;
       // v=3.6, g=13.5 → apex ≈ 0.48m; a double jump would exceed 0.9m
       return { ok: airborne && landed && maxY > 0.1 && maxY < 0.7, airborne, landed, maxY: +maxY.toFixed(3) };
     })()`);
     check(jumpTest && jumpTest.ok === true, 'jump works: airborne, lands, no double-jump ' + JSON.stringify(jumpTest));
+
+    // 12b. DEATH: must never black-screen. The death overlay has to be visible
+    // above the fade, the timer must run down, and [R] must restore control.
+    const deathFlow = await cdp.eval(`(async () => {
+      const wait = (ms) => new Promise(r => setTimeout(r, ms));
+      window.__dbg.die();
+      await wait(1000); // after the brief blackout punch
+      const d1 = window.__dbg.death();
+      const zFade = getComputedStyle(document.getElementById('fade')).zIndex;
+      const zDeath = getComputedStyle(document.getElementById('death-overlay')).zIndex;
+      const fadeCleared = document.getElementById('fade').classList.contains('clear');
+      const sub1 = document.getElementById('death-sub').textContent;
+      return { dead: d1.dead, overlay: d1.overlay, fadeCleared, zFade: +zFade, zDeath: +zDeath, sub1 };
+    })()`);
+    check(deathFlow.dead === true, 'death sets the dead state');
+    check(deathFlow.overlay === true, 'death screen is visible (never a black screen)');
+    check(deathFlow.fadeCleared === true, 'blackout lifts so the death card shows');
+    check(deathFlow.zDeath > deathFlow.zFade, 'death overlay stacks above the fade (' + deathFlow.zDeath + ' > ' + deathFlow.zFade + ')');
+    // skip the 6s wait deterministically and respawn via the [R] key
+    await cdp.eval(`window.__dbg._tickDead(6.5)`);
+    await sleep(200);
+    const beforeR = await cdp.eval(`JSON.stringify(window.__dbg.death())`);
+    await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyR'}))`);
+    await sleep(300);
+    const afterR = await cdp.eval(`JSON.stringify(window.__dbg.death())`);
+    check(JSON.parse(beforeR).dead === true && JSON.parse(afterR).dead === false, 'R respawns after the timer (before ' + beforeR + ' → after ' + afterR + ')');
+    const respawnPos = await cdp.eval(`JSON.stringify(window.__dbg.pos())`);
+    check(JSON.parse(respawnPos).every((n) => Number.isFinite(n)), 'respawn places the player at a finite position: ' + respawnPos);
 
     const lighting = await cdp.eval(`(async () => {
       // face -X so the wall/panel directly ahead is inside the beam

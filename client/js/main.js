@@ -176,7 +176,7 @@ function applySettings(s) {
 const menu = new MenuUI({
   create(name) { connectThen(() => net.createRoom(name)); },
   join(code, name) { connectThen(() => net.joinRoom(code, name)); },
-  start(level) { net.startGame(level); },
+  start(level) { requestStart(level); },
   leave() { leaveToMenu(); },
   applySettings,
   resume() { togglePause(false); E('settings-panel').classList.add('hidden'); },
@@ -191,6 +191,21 @@ async function connectThen(fn) {
   } catch (e) {
     menu.setStatus('CONNECTION FAILED — RETRY');
   }
+}
+
+// Start is host-only and a single dropped packet must not strand the lobby.
+// Resend once if the world has not spun up shortly after the first request —
+// never leaving the player on a black screen. Both sends are idempotent on the
+// server (the room is already 'playing') and the client 'start' handler guards
+// against re-entry, so at most one world is ever built.
+let startWatchdog = 0;
+function requestStart(level) {
+  net.startGame(level);
+  clearTimeout(startWatchdog);
+  startWatchdog = setTimeout(() => {
+    if (gameState === 'lobby') { net.startGame(level); } // retry once
+    else if (gameState === 'playing' && world) E('fade').classList.add('clear');
+  }, 2500);
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +256,7 @@ net.on('host', (m) => {
   menu.updateLobby({ ...net.room, players: [...net.players.values()], meId: net.id });
 });
 net.on('start', (m) => {
+  if (gameState === 'playing' && world && world.level === m.level) return; // idempotent: a duplicate start must not re-enter
   startGame(m.seed, m.level);
   // peers inherit doors the host (or earlier players) already toggled
   for (const [k, v] of Object.entries(m.doorStates || {})) {
@@ -658,11 +674,18 @@ function startGame(seed, level, opts = {}) {
 
   // intro fade (a short black lift; the sequences own their own reveals)
   startTime = performance.now();
+  clearTimeout(startWatchdog);
   if (skipIntro) {
     const fade = E('fade');
     fade.style.transition = 'opacity 3.5s ease';
     fade.classList.add('clear');
   }
+  // safety net: however we got here, the world is built and playable, so the
+  // found-footage overlay must never stay black. If a sequence failed to hand
+  // back, this lifts the fade so the player is never stuck on a black screen.
+  setTimeout(() => {
+    if (world && !dead && !paused) E('fade').classList.add('clear');
+  }, 6000);
   audio.distantMetal(0.4);
 }
 
@@ -795,38 +818,55 @@ function localDeath() {
   if (flash && flash.on) flash.setOn(false);
   if (monsters) monsters.notifyDeath(); // director: quiet mourning period
   net.sendEvent('died', { pid: net.id });
-  // found-footage death: glitch hard, blackout, spectator / respawn
+  // found-footage death: glitch hard, drop to black, then the death card.
   engine.bumpGlitch(3.5);
   player.trauma(1);
   audio.monsterAttack(player.pos.x, 1.5, player.pos.z);
   audio.heartbeat(1);
   const fade = E('fade');
-  fade.style.transition = 'opacity 0.12s ease';
-  fade.classList.remove('clear');
+  fade.style.transition = 'opacity 0.18s ease';
+  fade.classList.remove('clear');   // brief blackout punch…
   respawnT = 6;
+  E('btn-death-respawn').disabled = true;
   setTimeout(() => {
-    if (gameState !== 'playing') return;
-    E('death-overlay').classList.remove('hidden');
+    if (!dead || gameState !== 'playing') return;
+    // …then LIFT the blackout so the death screen is never hidden behind it.
+    // (The death overlay now sits above the fade too, but this guarantees the
+    // player is never left staring at a black screen even if z-order changes.)
+    fade.style.transition = 'opacity 0.5s ease';
+    fade.classList.add('clear');
+    const ov = E('death-overlay');
+    ov.classList.remove('hidden');
     E('death-sub').textContent = remotePlayers.players.size
       ? 'SPECTATING — [R] RESPAWN IN 6s'
       : 'RESPAWN IN 6s — [R]';
-  }, 700);
+  }, 750);
 }
 
 function respawn() {
+  if (!dead) return;
   dead = false;
   player.dead = false;
   const [sx, sz] = world.spawnPoint(0);
   player.teleport(sx, sz);
   player.resetState();
+  player.yaw = player.yawTarget = Math.random() * Math.PI * 2;
+  player.pitch = 0;
   player.enabled = !paused;
   player.trauma(0.4);
-  if (flash) flash.battery = Math.max(flash.battery, 30); // mercy charge
+  // reset the held light cleanly and hand back a mercy charge
+  if (flash) { flash.reset(); flash.battery = Math.max(flash.battery, 35); }
+  spectateIdx = 0;
   net.sendEvent('respawn', { pid: net.id });
   E('death-overlay').classList.add('hidden');
+  E('btn-death-respawn').disabled = true;
   const fade = E('fade');
-  fade.style.transition = 'opacity 2.2s ease';
+  fade.style.transition = 'opacity 1.4s ease';
   fade.classList.add('clear');
+  // re-place the camera immediately so the first live frame is not a spectate
+  // frame at the old death position
+  camera.position.set(player.pos.x, 1.62, player.pos.z);
+  camera.rotation.set(0, player.yaw, 0);
 }
 
 function levelTransition(level) {
@@ -1439,6 +1479,10 @@ function togglePause(force) {
 const _endBtn = E('ending-continue');
 if (_endBtn) _endBtn.addEventListener('click', () => endEnding());
 
+// death screen: a visible button so touch/no-keyboard players can always retry
+const _deathBtn = E('btn-death-respawn');
+if (_deathBtn) _deathBtn.addEventListener('click', () => { if (dead && respawnT <= 0) respawn(); });
+
 let lastHudMenuToggle = 0;
 E('btn-hud-menu').addEventListener('click', () => {
   // hybrid/touch devices can fire click twice (tap + synthesized mouse click)
@@ -1944,8 +1988,14 @@ function loop() {
     spectateCamera(dt);
     if (respawnT > 0) {
       respawnT -= dt;
-      if (respawnT <= 0) E('death-sub').textContent = 'PRESS [R] TO RESPAWN';
-      else E('death-sub').textContent = `RESPAWN IN ${Math.ceil(respawnT)}s`;
+      const sub = E('death-sub');
+      const btn = E('btn-death-respawn');
+      if (respawnT <= 0) {
+        sub.textContent = 'PRESS [R] TO RESPAWN';
+        if (btn) btn.disabled = false;
+      } else {
+        sub.textContent = `RESPAWN IN ${Math.ceil(respawnT)}s`;
+      }
     }
   }
   player.flashOn = flash && flash.on ? 1 : 0;
@@ -2248,6 +2298,7 @@ window.__dbg = {
     penumbra: flash.spot.penumbra,
     distance: flash.spot.distance,
     decay: flash.spot.decay,
+    intensity: flash.spot.intensity,
     spillAngle: flash.spill.angle,
     aim: [flash._aim.x, flash._aim.y, flash._aim.z],
   } : null),
@@ -2296,6 +2347,8 @@ window.__dbg = {
   },
   scream: () => doScream(true),
   respawn: () => respawn(),
+  die: () => localDeath(), // test hook: run the real death flow
+  death: () => ({ dead, respawnT, overlay: !E('death-overlay').classList.contains('hidden'), fade: !E('fade').classList.contains('clear') }),
   _ev: [], // ring of recent event kinds seen (debug/test)
   placeNote: (dx, dz) => {
     if (!worldMgr) return null;
@@ -2346,6 +2399,17 @@ window.__dbg = {
   },
   teleport: (x, z, yaw = 0) => { player.pos.x = x; player.pos.z = z; player.yaw = player.yawTarget = yaw; },
   step: (dt) => { player.update(dt, world, worldMgr); },
+  // advance the death respawn timer deterministically (rAF is throttled in
+  // headless runs, so tests cannot wait out the real 6s)
+  _tickDead: (dt) => {
+    if (dead && respawnT > 0) {
+      respawnT -= dt;
+      if (respawnT <= 0) {
+        E('death-sub').textContent = 'PRESS [R] TO RESPAWN';
+        const b = E('btn-death-respawn'); if (b) b.disabled = false;
+      }
+    }
+  },
   remoteAnims: () => (remotePlayers ? [...remotePlayers.players.values()].map((p) => p.anim) : []),
   remoteY: () => (remotePlayers ? [...remotePlayers.players.values()].map((p) => p.cur.y) : []),
 };

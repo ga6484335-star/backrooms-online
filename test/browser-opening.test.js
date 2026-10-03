@@ -139,9 +139,11 @@ async function main() {
   await sleep(400);
   const cone = await cdp.eval(`JSON.stringify(window.__dbg.flashlightCone())`);
   const c = JSON.parse(cone);
-  check(c && c.angle > 0.1 && c.angle < 0.35, 'flashlight beam is a tight cone (' + (c && c.angle) + ' rad)');
+  check(c && c.angle > 0.1 && c.angle < 0.2, 'flashlight beam is a tight, focused cone (' + (c && c.angle) + ' rad)');
+  check(c && c.penumbra > 0.5 && c.penumbra < 0.9, 'flashlight beam has soft natural edges (penumbra ' + (c && c.penumbra) + ')');
   check(c && c.spillAngle > c.angle, 'flashlight has a wider spill halo');
-  check(c && c.decay === 2 && c.distance >= 40, 'flashlight has physical falloff and real throw');
+  check(c && c.decay === 2 && c.distance >= 60, 'flashlight has physical falloff and real throw');
+  check(c && c.intensity > 0, 'flashlight carries natural intensity');
 
   // console errors?
   const errs = cdp.events.filter((e) => e.method === 'Runtime.exceptionThrown');

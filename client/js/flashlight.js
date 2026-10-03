@@ -3,7 +3,7 @@
 // subtle aim lag so it feels physically held. Battery drains while ON and can
 // be refilled from procedural pickups; flicker intensifies as it dies.
 //
-// The beam is a camera-mounted SpotLight whose aim trails the camera by ~85ms,
+// The beam is a camera-mounted SpotLight whose aim trails the camera by ~70ms,
 // so looking left/right leaves the light behind for a heartbeat the way a real
 // hand does — small enough to feel cinematic, never enough to hurt aiming.
 import * as THREE from 'three';
@@ -12,8 +12,8 @@ const DRAIN_PER_SEC = 100 / 300; // ~5 minutes of light
 const BATTERY_REFILL = 55;
 
 // aim / position smoothing time constants (seconds). Tiny on purpose.
-const AIM_TAU = 0.085;
-const POS_TAU = 0.05;
+const AIM_TAU = 0.07;
+const POS_TAU = 0.045;
 
 export class Flashlight {
   constructor(camera, scene, audio, quality) {
@@ -28,36 +28,39 @@ export class Flashlight {
     const shadows = quality === 'high' || quality === 'ultra';
 
     // --- primary beam: narrow, physical falloff, soft edge ---
-    this.spot = new THREE.SpotLight(0xfff3dd, 0, 58, 0.21, 0.82, 2.0);
+    // A tight hot core (≈9°) with a long throw. Penumbra keeps the rim soft so
+    // the spot never reads as a hard, flat disc; decay 2 is true inverse-square.
+    this.spot = new THREE.SpotLight(0xfff2d6, 0, 72, 0.165, 0.68, 2.0);
     this.spot.visible = false;
     this.spot.castShadow = shadows;
     if (shadows) {
       this.spot.shadow.mapSize.set(1024, 1024);
       this.spot.shadow.camera.near = 0.3;
-      this.spot.shadow.camera.far = 58;
+      this.spot.shadow.camera.far = 72;
       this.spot.shadow.bias = -0.0016;
-      this.spot.shadow.radius = 1.4;
+      this.spot.shadow.radius = 1.6;
     }
     scene.add(this.spot);
     scene.add(this.spot.target);
 
     // --- spill halo: a wider, dimmer second cone gives the beam a soft edge
     //     and a little throw light, so surfaces respond naturally instead of
-    //     the single flat cone the old light produced ---
-    this.spill = new THREE.SpotLight(0xffe8c2, 0, 34, 0.52, 0.95, 2.0);
+    //     the single flat cone the old light produced. Kept deliberately weak
+    //     so the darkness outside the beam stays dark. ---
+    this.spill = new THREE.SpotLight(0xffe6bd, 0, 30, 0.44, 0.92, 2.0);
     this.spill.visible = false;
     scene.add(this.spill);
     scene.add(this.spill.target);
 
     // faint, tight fill so the player's own feet/held items are not pitch black
-    this.fill = new THREE.PointLight(0xffe9c0, 0, 2.6, 2);
+    this.fill = new THREE.PointLight(0xffe9c0, 0, 2.4, 2);
     this.fill.visible = false;
     scene.add(this.fill);
 
     // volumetric beam: a translucent cone with a length + edge gradient so it
     // reads as a shaft of light, not a solid cone. Additive, no depth write.
-    const beamGeo = new THREE.CylinderGeometry(0.02, 0.62, 6.5, 18, 1, true);
-    beamGeo.translate(0, -3.25, 0);
+    const beamGeo = new THREE.CylinderGeometry(0.015, 0.42, 8.0, 20, 1, true);
+    beamGeo.translate(0, -4.0, 0);
     beamGeo.rotateX(-Math.PI / 2);
     const beamMat = new THREE.ShaderMaterial({
       transparent: true,
@@ -83,9 +86,9 @@ export class Flashlight {
         void main() {
           // fade along the length (brightest near the lens) and toward the edge
           float len = clamp(vUv.y, 0.0, 1.0);
-          float along = pow(len, 1.6);
-          float edge = smoothstep(0.0, 0.45, 1.0 - abs(vUv.x - 0.5) * 2.0);
-          float a = uOpacity * along * mix(0.35, 1.0, edge);
+          float along = pow(len, 2.0);
+          float edge = smoothstep(0.0, 0.5, 1.0 - abs(vUv.x - 0.5) * 2.0);
+          float a = uOpacity * along * mix(0.2, 1.0, edge);
           gl_FragColor = vec4(uColor, a);
         }
       `,
@@ -135,11 +138,27 @@ export class Flashlight {
     this.audio.batteryPickup();
   }
 
+  // snap the held light back to the camera with no lag — used on respawn / level
+  // start so the first frame after a hard cut is not the old aim direction
+  reset() {
+    this.on = false;
+    this._handInit = false;
+    this._aim.set(0, 0, -1);
+    this.flickerT = 0;
+    this._apply();
+  }
+
   _apply() {
     this.spot.visible = this.on;
     this.spill.visible = this.on;
     this.fill.visible = this.on;
     this.beam.visible = this.on;
+    // give the light a live base the instant it switches on, before the next
+    // update() refines it with wobble/flicker (matters for that first frame)
+    this.spot.intensity = this.on ? 340 : 0;
+    this.spill.intensity = this.on ? 52 : 0;
+    this.fill.intensity = this.on ? 0.3 : 0;
+    this.beam.material.uniforms.uOpacity.value = this.on ? 0.024 : 0;
   }
 
   dispose(scene) {
@@ -211,9 +230,9 @@ export class Flashlight {
       const panic = 1 - this.battery / 22;
       if (Math.sin(this.flickerT * (5 + panic * 14)) > 0.72 - panic * 0.3) f *= 0.35 + (1 - panic) * 0.5;
     }
-    this.spot.intensity = 260 * f;
-    this.spill.intensity = 68 * f;
-    this.fill.intensity = 0.35 * f;
-    this.beam.material.uniforms.uOpacity.value = 0.035 * f;
+    this.spot.intensity = 340 * f;
+    this.spill.intensity = 52 * f;
+    this.fill.intensity = 0.3 * f;
+    this.beam.material.uniforms.uOpacity.value = 0.024 * f;
   }
 }

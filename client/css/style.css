@@ -123,10 +123,10 @@ body {
 #cc-batt.low { color: #ff5a4a; animation: blink 0.8s steps(2) infinite; }
 
 #death-overlay {
-  position: fixed; inset: 0; z-index: 55;
+  position: fixed; inset: 0; z-index: 94;
   display: flex; align-items: center; justify-content: center;
   background: radial-gradient(ellipse at center, rgba(20,0,0,0.55), rgba(0,0,0,0.92));
-  pointer-events: none;
+  pointer-events: auto;
 }
 .death-inner { text-align: center; }
 .death-title {
@@ -135,6 +135,8 @@ body {
   animation: blink 1.6s steps(2) infinite;
 }
 #death-sub { margin-top: 14px; font-size: 13px; letter-spacing: 0.3em; color: #998; }
+#btn-death-respawn { margin-top: 22px; }
+#btn-death-respawn:disabled { opacity: 0.4; cursor: default; }
 @keyframes blink { 50% { opacity: 0.35; } }
 #cc-room { color: #9a917a; }
 #crosshair {

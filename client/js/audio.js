@@ -1079,23 +1079,33 @@ export class AudioEngine {
   flashlight(on) {
     if (!this.ensure()) return;
     const ctx = this.ctx, t = ctx.currentTime;
+    // crisp high transient: the plastic switch snapping
     const s = ctx.createBufferSource(); s.buffer = this._noiseBuf;
     const f = ctx.createBiquadFilter(); f.type = 'bandpass';
-    f.frequency.value = on ? 2200 : 1700; f.Q.value = 6;
+    f.frequency.value = on ? 2600 : 1900; f.Q.value = 7;
     const g = ctx.createGain();
-    g.gain.setValueAtTime(0.16, t);
-    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.035);
+    g.gain.setValueAtTime(0.15, t);
+    g.gain.exponentialRampToValueAtTime(0.0006, t + 0.028);
     s.connect(f).connect(g).connect(this.master);
     s.start(t, Math.random(), 0.05);
+    // low mechanical "thunk" body so the click has weight, not just a hiss
+    const o = ctx.createOscillator(); o.type = 'square'; o.frequency.value = on ? 240 : 190;
+    const of = ctx.createBiquadFilter(); of.type = 'lowpass'; of.frequency.value = 700;
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.0001, t);
+    og.gain.exponentialRampToValueAtTime(on ? 0.05 : 0.035, t + 0.004);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+    o.connect(of).connect(og).connect(this.master);
+    o.start(t); o.stop(t + 0.07);
     if (on) {
       // a hair of electrical onset so switching on has a body
-      const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = 1300;
-      const og = ctx.createGain();
-      og.gain.setValueAtTime(0.0001, t);
-      og.gain.exponentialRampToValueAtTime(0.03, t + 0.01);
-      og.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
-      o.connect(og).connect(this.master);
-      o.start(t); o.stop(t + 0.1);
+      const e = ctx.createOscillator(); e.type = 'triangle'; e.frequency.value = 1300;
+      const eg = ctx.createGain();
+      eg.gain.setValueAtTime(0.0001, t);
+      eg.gain.exponentialRampToValueAtTime(0.028, t + 0.01);
+      eg.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+      e.connect(eg).connect(this.master);
+      e.start(t); e.stop(t + 0.1);
     }
   }
 
