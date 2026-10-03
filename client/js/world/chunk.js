@@ -8,6 +8,7 @@ import { GeoBuilder, PROP_BUILDERS } from '../props.js';
 import { hashStr, rngFrom, chance, range, intRange } from '../rng.js';
 import { getLevel } from '../levels.js';
 import { materialsFor } from '../materials.js';
+import { objectiveSites, exitCellFor } from '../objectives.js';
 
 // door leaf materials (cached per level): aged painted wood / metal handle
 const doorMatCache = new Map();
@@ -64,6 +65,7 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
   const specials = [];
   const notes = [];
   const lockedDoors = [];           // for key spawning
+  const interactables = [];         // objective sites + exit gate (progression)
 
   for (let cc = 0; cc < CELLS_PER_CHUNK; cc++) {
     for (let cr = 0; cr < CELLS_PER_CHUNK; cr++) {
@@ -351,8 +353,67 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
     group.add(em);
   }
 
-  group.userData = { colliders, lights, doors, specials, notes, chunkX, chunkZ };
+  // ---- progression interactables: objective sites + the level exit gate.
+  // Placement is a pure function of (seed, level) via objectives.js, so every
+  // client builds the same markers at the same world position. Runtime "used"
+  // state (activated / unlocked) is owned by main.js, not the geometry.
+  {
+    const level = world.level;
+    for (const site of objectiveSites(world, level)) {
+      if (Math.floor(site.cx / CELLS_PER_CHUNK) !== chunkX) continue;
+      if (Math.floor(site.cz / CELLS_PER_CHUNK) !== chunkZ) continue;
+      buildObjectiveSite(gb, gbEmiss, site, level);
+      colliders.push({ x: (site.cx + 0.5) * CELL, z: (site.cz + 0.5) * CELL, r: 0.5 });
+      interactables.push({ kind: 'site', key: site.key, index: site.index, cx: site.cx, cz: site.cz,
+        x: (site.cx + 0.5) * CELL, z: (site.cz + 0.5) * CELL });
+    }
+    const [ecx, ecz] = exitCellFor(world, level);
+    if (Math.floor(ecx / CELLS_PER_CHUNK) === chunkX && Math.floor(ecz / CELLS_PER_CHUNK) === chunkZ) {
+      const ex = (ecx + 0.5) * CELL, ez = (ecz + 0.5) * CELL;
+      buildExitGate(gb, gbEmiss, ex, ez, world.cellAt(ecx, ecz).ceilH);
+      interactables.push({ kind: 'exit', key: `exit:${level}`, cx: ecx, cz: ecz, x: ex, z: ez });
+    }
+    // fixture that lets the exit read as a lit doorway
+    const exSite = interactables.find((it) => it.kind === 'exit');
+    if (exSite) {
+      lights.push({ cx: exSite.cx, cz: exSite.cz, x: exSite.x, z: exSite.z, y: 2.3,
+        color: 0xfff0d0, intensity: 12, distance: 8,
+        flickerSeed: hashStr(seed, `exitlight:${level}`), special: null });
+    }
+  }
+
+  group.userData = { colliders, lights, doors, specials, notes, interactables, chunkX, chunkZ };
   return group;
+}
+
+// An "intake node": a black monolith pedestal with twin tape reels on top.
+// Reads as machinery the Backrooms left running.
+function buildObjectiveSite(gb, gbEmiss, site, level) {
+  const b = makeShiftBuilder(gb, (site.cx + 0.5) * CELL, (site.cz + 0.5) * CELL, (level % 4) * 0.35 - 0.5);
+  b.box(0.9, 0.9, 0.9, 0, 0.0, 0, [34, 32, 36]);       // plinth
+  b.box(0.7, 1.15, 0.7, 0, 0.9, 0, [26, 24, 28]);      // column
+  b.box(0.78, 0.06, 0.78, 0, 2.05, 0, [58, 54, 60]);   // cap
+  // two reels (flat cylinders) on the cap, read as tape spools
+  b.cylinder(0.24, 0.09, -0.18, 2.12, 0, [150, 44, 40]);
+  b.cylinder(0.24, 0.09, 0.18, 2.12, 0, [150, 44, 40]);
+  // slot of cold light
+  gbEmiss.box(0.5, 0.05, 0.08, (site.cx + 0.5) * CELL, 1.55, (site.cz + 0.5) * CELL, [180, 220, 255]);
+}
+
+// The exit: a standing archive doorframe with a cold bright mouth. Locked until
+// the level objectives complete; the brightness reads as an invitation.
+function buildExitGate(gb, gbEmiss, x, z, levelDef, ceilH) {
+  const h = Math.min(3.4, Math.max(2.6, ceilH - 0.6));
+  const b = makeShiftBuilder(gb, x, z, 0);
+  b.box(2.2, 0.28, 0.5, 0, 0.0, 0, [40, 38, 44]);        // threshold slab
+  b.box(0.22, h, 0.5, -0.99, 0.28, 0, [30, 28, 34]);     // left jamb
+  b.box(0.22, h, 0.5, 0.99, 0.28, 0, [30, 28, 34]);      // right jamb
+  b.box(2.2, 0.24, 0.5, 0, h + 0.04, 0, [30, 28, 34]);   // lintel
+  // the mouth — a tall sheet of light behind the frame
+  gbEmiss.box(1.76, h - 0.1, 0.06, x, 0.33, z, [212, 230, 255]);
+  // hazard chevrons on the jamb faces
+  b.box(0.16, 0.5, 0.54, -0.99, 1.4, 0, [150, 120, 40]);
+  b.box(0.16, 0.5, 0.54, 0.99, 1.4, 0, [150, 120, 40]);
 }
 
 function pushWall(gb, dir, wx, wz, cell, h, col) {
@@ -615,6 +676,7 @@ export class WorldManager {
       doors: group.userData.doors,
       specials: group.userData.specials,
       notes: group.userData.notes,
+      interactables: group.userData.interactables || [],
       lightMesh: group.getObjectByName('lightpanels'),
     });
     for (const d of group.userData.doors) this.doorIndex.set(`${d.cx},${d.cz},${d.dir}`, d);
@@ -664,9 +726,14 @@ export class WorldManager {
     return out;
   }
 
-  nearestInteractable(px, pz) {
+  nearestInteractable(px, pz, isUsed) {
     let best = null, bestD = 3.2;
     for (const chunk of this.chunks.values()) {
+      for (const it of chunk.interactables) {
+        if (isUsed && isUsed(it.key)) continue;
+        const d = Math.hypot(it.x - px, it.z - pz);
+        if (d < bestD) { best = { type: it.kind, data: it, dist: d }; bestD = d; }
+      }
       for (const n of chunk.notes) {
         const d = Math.hypot(n.x - px, n.z - pz);
         if (d < bestD) { best = { type: n.key ? 'key' : n.battery ? 'battery' : 'note', data: n, dist: d }; bestD = d; }

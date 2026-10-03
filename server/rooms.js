@@ -144,13 +144,21 @@ class Room {
       this.eventLog.push(msg);
       if (this.eventLog.length > 64) this.eventLog.shift();
     }
+    // keep the room's nominal level in step so a fresh start/late join begins
+    // at the right chapter (the event log still replays intermediate state)
+    if ((kind === 'advance' || kind === 'noclip') && data && Number.isFinite(data.to ?? data.level)) {
+      this.level = Number.isFinite(data.to) ? data.to : data.level;
+    }
     return this.eventSeq;
   }
 
   isEmpty() { return this.players.size === 0; }
 }
 
-const WORLD_EVENTS = new Set(['reldoor', 'chunkmorph', 'lightdie', 'spawnmonster', 'caught', 'died', 'respawn', 'door', 'keypickup', 'battpickup']);
+// Events that change persistent world/level state must be replayed to late
+// joiners and reconnecting players. Progression events (objective sites, level
+// advances, the finale) are included so co-op state never desyncs.
+const WORLD_EVENTS = new Set(['reldoor', 'chunkmorph', 'lightdie', 'spawnmonster', 'caught', 'died', 'respawn', 'door', 'keypickup', 'battpickup', 'obj', 'advance', 'ending', 'noclip']);
 
 function pickColor(i) {
   const colors = ['#d9b46c', '#8fa3c7', '#a3c78f', '#c78f8f', '#b48fd9', '#7ec8c8', '#c7b1a0', '#9ec78f'];

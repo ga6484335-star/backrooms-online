@@ -1,0 +1,205 @@
+// ============================================================================
+// OBJECTIVES — per-level cooperative goals that gate progression.
+//
+// No more random teleporting between levels. Each level lays out a small set of
+// deterministic OBJECTIVE SITES (intake nodes, relays, archives) on the
+// guaranteed-open highway corridors near spawn, so they are always reachable by
+// every player in the room. Activating a site reveals a story fragment. When
+// every objective is done the exit is unlocked and the party advances together.
+//
+// All placement is a pure function of (seed, level) and every client computes
+// the same cells, so the world needs no extra server state for positions —
+// only completed objectives are relayed (see the `obj` event).
+// ============================================================================
+import { rngFrom, hashStr } from './rng.js';
+import { isFinalLevel } from './story.js';
+
+// per-level objective plans. `site` = activate N objective sites.
+// `survive` = once everything else is done, hold the level for `seconds`.
+export const OBJECTIVE_PLANS = {
+  0: [{ id: 'nodes', kind: 'site', label: 'FIND THE INTAKE NODES', count: 3 }],
+  1: [{ id: 'nodes', kind: 'site', label: 'TRACE THE HUM', count: 3 }],
+  2: [{ id: 'nodes', kind: 'site', label: 'PURGE THE CAPSTANS', count: 3 }],
+  3: [{ id: 'nodes', kind: 'site', label: 'DRAIN THE ARCHIVE', count: 3 }],
+  4: [{ id: 'nodes', kind: 'site', label: 'RECOVER THE FILE', count: 3 }],
+  5: [{ id: 'nodes', kind: 'site', label: 'ACCOUNT FOR THE GUESTS', count: 3 }],
+  6: [
+    { id: 'nodes', kind: 'site', label: 'ALIGN THE RELAYS', count: 3 },
+    { id: 'nodes2', kind: 'site', label: 'HOLD THE READ', count: 3 },
+    { id: 'hold', kind: 'survive', label: 'SURVIVE THE READ', seconds: 75 },
+  ],
+};
+
+export function planFor(level) {
+  return OBJECTIVE_PLANS[level] || OBJECTIVE_PLANS[0];
+}
+
+export function siteGoal(level) {
+  return planFor(level).filter((o) => o.kind === 'site').reduce((n, o) => n + o.count, 0);
+}
+
+// Deterministic site cells for a level. Placed along the guaranteed-open
+// highway corridors (rows/columns divisible by 4) at increasing radii, so a
+// straight walk from spawn crosses each one. Sites never drop inside a special
+// room: if a candidate cell is special we nudge outward until it is ordinary.
+export function siteCells(world, level, count) {
+  const seed = world.seed >>> 0;
+  const rng = rngFrom(hashStr(seed, `obj:${level}`));
+  const out = [];
+  const total = count !== undefined ? count : siteGoal(level);
+  const used = new Set();
+  let i = 0;
+  while (out.length < total && i < total * 12) {
+    const r = 6 + i * 3 + ((rng() * 2) | 0);
+    const axis = i % 2;              // 0 = x-highway, 1 = z-highway
+    const sign = (i >> 1) % 2 ? -1 : 1;
+    i++;
+    let cx, cz;
+    if (axis === 0) { cx = sign * r; cz = 0; } else { cx = 0; cz = sign * r; }
+    // only accept ordinary cells; nudge along the highway if we hit a special
+    for (let n = 0; n < 8; n++) {
+      const tx = axis === 0 ? cx + sign * n : cx;
+      const tz = axis === 1 ? cz + sign * n : cz;
+      const key = `${tx},${tz}`;
+      if (used.has(key)) continue;
+      const cell = world.cellAt(tx, tz);
+      if (cell.special || cell.water) continue;
+      used.add(key);
+      out.push([tx, tz]);
+      break;
+    }
+  }
+  return out;
+}
+
+export function siteCenter(cx, cz) {
+  return [(cx + 0.5) * 4, (cz + 0.5) * 4]; // CELL = 4
+}
+
+export function siteKey(level, cx, cz) { return `site:${level}:${cx},${cz}`; }
+
+// Every objective site for a level, as {key, cx, cz}, in activation order.
+export function objectiveSites(world, level) {
+  const cells = siteCells(world, level, siteGoal(level));
+  return cells.map(([cx, cz], i) => ({ key: siteKey(level, cx, cz), cx, cz, index: i }));
+}
+
+// Deterministic exit cell: further out along a highway than every site, so it
+// is always reachable and never overlaps an objective.
+export function exitCellFor(world, level) {
+  const seed = world.seed >>> 0;
+  const rng = rngFrom(hashStr(seed, `exit:${level}`));
+  const base = siteGoal(level) * 3 + 8;
+  for (let k = 0; k < 20; k++) {
+    const r = base + k * 2 + ((rng() * 2) | 0);
+    const axis = k % 2;
+    const sign = (k >> 1) % 2 ? -1 : 1;
+    for (let n = 0; n < 6; n++) {
+      const cx = axis === 0 ? sign * (r + n) : 0;
+      const cz = axis === 1 ? sign * (r + n) : 0;
+      const cell = world.cellAt(cx, cz);
+      if (!cell.special && !cell.water) return [cx, cz];
+    }
+  }
+  return [base, 0];
+}
+
+// Co-op objective tracker. Holds only serializable state so it can be snapshotted
+// into the `obj` event and replayed for late joiners / reconnects.
+export class ObjectiveTracker {
+  constructor(level) {
+    this.setLevel(level);
+  }
+
+  setLevel(level) {
+    this.level = level | 0;
+    this.plan = planFor(this.level);
+    this.activated = new Set();   // site keys activated
+    this.holdT = 0;               // seconds held on a survive objective
+    this.lastBeat = -1;           // index of last revealed story fragment
+  }
+
+  countFor(kind) {
+    return this.plan.filter((o) => o.kind === kind).reduce((n, o) => n + o.count, 0);
+  }
+
+  siteCount() { return this.activated.size; }
+  siteGoalN() { return this.countFor('site'); }
+
+  objectiveDone(o) {
+    if (o.kind === 'site') {
+      // site objectives are filled in order; each consumes its share of sites
+      return this.activated.size >= this.siteGoalN();
+    }
+    if (o.kind === 'survive') return this.holdT >= (o.seconds || 0);
+    return false;
+  }
+
+  // a site was activated by this client (or a peer). returns the beat index to
+  // reveal, or -1 if it was already known.
+  activateSite(key) {
+    // a replayed event from an earlier chapter must not count toward this
+    // level's goal — keys are namespaced `site:<level>:<cx>,<cz>`
+    if (typeof key === 'string' && key.startsWith('site:') && !key.startsWith(`site:${this.level}:`)) return -1;
+    if (this.activated.has(key)) return -1;
+    this.activated.add(key);
+    this.lastBeat = this.activated.size - 1;
+    return this.lastBeat;
+  }
+
+  isComplete() {
+    return this.plan.every((o) => this.objectiveDone(o));
+  }
+
+  // call each frame. `dt` seconds. The survive objective only ticks once every
+  // other objective is satisfied (the level is "on hold" until then).
+  update(dt) {
+    const hold = this.plan.find((o) => o.kind === 'survive');
+    if (!hold) return;
+    const othersDone = this.plan.filter((o) => o.kind !== 'survive').every((o) => this.objectiveDone(o));
+    if (othersDone && !this.isComplete()) this.holdT += dt;
+  }
+
+  // 0..1 overall progress for the HUD ring
+  progress() {
+    let done = 0, total = 0;
+    for (const o of this.plan) {
+      total++;
+      if (this.objectiveDone(o)) done++;
+    }
+    // partial credit for site objectives so the bar moves as you explore
+    const sg = this.siteGoalN();
+    if (sg > 0) {
+      const siteObjs = this.plan.filter((o) => o.kind === 'site').length;
+      done -= siteObjs;
+      total -= siteObjs;
+      total += sg;
+      done += Math.min(sg, this.activated.size);
+    }
+    return total > 0 ? Math.min(1, done / total) : 1;
+  }
+
+  snapshot() {
+    return { level: this.level, site: [...this.activated], t: +this.holdT.toFixed(2) };
+  }
+
+  apply(snap) {
+    if (!snap) return;
+    if (Array.isArray(snap.site)) for (const k of snap.site) this.activated.add(k);
+    if (typeof snap.t === 'number' && snap.t > this.holdT) this.holdT = snap.t;
+  }
+
+  // HUD line: e.g. "INTAKE NODES 1/3" or "SURVIVE THE READ 42s"
+  hudLines() {
+    const lines = [];
+    for (const o of this.plan) {
+      if (o.kind === 'site') {
+        lines.push({ label: o.label, value: `${Math.min(this.activated.size, this.siteGoalN())}/${this.siteGoalN()}`, done: this.objectiveDone(o) });
+      } else if (o.kind === 'survive') {
+        const secs = Math.max(0, Math.ceil((o.seconds || 0) - this.holdT));
+        lines.push({ label: o.label, value: this.objectiveDone(o) ? 'DONE' : `${secs}s`, done: this.objectiveDone(o) });
+      }
+    }
+    return lines;
+  }
+}

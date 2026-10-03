@@ -16,6 +16,9 @@ export class HorrorEvents {
     this.onMessage = null;
     this.lightMgr = null;
     this.director = { distance: 0 }; // fed from the main loop
+    // story flavour: a per-level pool of unsettling one-liners. When set, the
+    // scheduler occasionally surfaces one instead of a generic scare message.
+    this.ambientLine = null;         // fn() -> string
   }
 
   setHostFn(fn) { this.isHostFn = fn; }
@@ -42,6 +45,12 @@ export class HorrorEvents {
     }
     if (this.personalTimer <= 0) {
       this.personalTimer = (60 + Math.random() * 80) * (1 - depth * 0.4);
+      // sometimes the room itself speaks — an environmental story fragment
+      // delivered as a found-footage subtitle rather than a scare.
+      if (this.ambientLine && Math.random() < 0.28) {
+        this.fire('storyline', player);
+        return;
+      }
       const roll = Math.random();
       if (roll < 0.3) this.fire('behindyou', player);
       else if (roll < 0.45) this.fire('glitch', player);
@@ -95,6 +104,19 @@ export class HorrorEvents {
         break;
       }
       case 'glitch': this.renderer.bumpGlitch(1.2); break;
+      case 'storyline': {
+        // the whisper answers in words. Faint voice, unsettling caption, and
+        // a barely-there glitch so it reads as a recording, not a subtitle.
+        if (this.onMessage) {
+          const line = this.ambientLine ? this.ambientLine() : null;
+          if (line) {
+            this.onMessage(line);
+            a.monsterVoice('shadow', player.pos.x + (Math.random() - 0.5) * 8, 1.4, player.pos.z + (Math.random() - 0.5) * 8, 0.22);
+            this.renderer.bumpGlitch(0.5);
+          }
+        }
+        break;
+      }
       case 'whisper': {
         a.monsterVoice('shadow', player.pos.x + (Math.random() - 0.5) * 6, 1.5, player.pos.z + (Math.random() - 0.5) * 6, 0.25);
         break;

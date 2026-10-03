@@ -1,0 +1,148 @@
+// Progression + story logic tests. Pure Node (no THREE, no DOM): verifies the
+// objective planner, co-op tracker serialization, deterministic site/exit
+// placement, and the authored narrative spine.
+import { WorldModel } from '../client/js/worldgen.js';
+import {
+  OBJECTIVE_PLANS, planFor, siteGoal, siteCells, siteCenter, siteKey,
+  objectiveSites, exitCellFor, ObjectiveTracker,
+} from '../client/js/objectives.js';
+import {
+  STORY, ENDING, LEVEL_ORDER, FINAL_LEVEL, storyFor, introFor, epilogueFor,
+  beatsFor, beatFor, ambientFor, levelTitle, nextStoryLevel, isFinalLevel,
+} from '../client/js/story.js';
+
+let pass = 0, fail = 0;
+function check(cond, label) {
+  if (cond) { pass++; console.log('  \u2714 ' + label); }
+  else { fail++; console.error('  \u2718 FAILED: ' + label); process.exitCode = 1; }
+}
+
+const LEVELS = [0, 1, 2, 3, 4, 5, 6];
+
+// ---------------------------------------------------------------------------
+console.log('objective plans');
+for (const lv of LEVELS) {
+  const plan = planFor(lv);
+  check(Array.isArray(plan) && plan.length >= 1, `level ${lv}: has a plan`);
+  check(plan.some((o) => o.kind === 'site'), `level ${lv}: has site objectives`);
+  const total = plan.filter((o) => o.kind === 'site').reduce((n, o) => n + o.count, 0);
+  check(siteGoal(lv) === total, `level ${lv}: siteGoal matches plan (${total})`);
+  check(plan.every((o) => o.label && o.id), `level ${lv}: every objective is labelled`);
+}
+check(planFor(99) === OBJECTIVE_PLANS[0], 'unknown level falls back to level 0 plan');
+
+// ---------------------------------------------------------------------------
+console.log('\ndeterministic site / exit placement');
+const SEEDS = [1, 0xabcdef, 0xffffffff, 123456];
+for (const lv of LEVELS) {
+  const world = new WorldModel(SEEDS[0], lv);
+  const cells = siteCells(world, lv);
+  check(cells.length === siteGoal(lv), `level ${lv}: ${cells.length} site cells`);
+  const keys = new Set(cells.map(([cx, cz]) => `${cx},${cz}`));
+  check(keys.size === cells.length, `level ${lv}: site cells are unique`);
+  let ordinary = true;
+  for (const [cx, cz] of cells) {
+    const c = world.cellAt(cx, cz);
+    if (c.special || c.water) ordinary = false;
+  }
+  check(ordinary, `level ${lv}: sites avoid special/water cells`);
+
+  // same seed -> identical placement (multiplayer requirement)
+  const world2 = new WorldModel(SEEDS[0], lv);
+  const cells2 = siteCells(world2, lv);
+  check(JSON.stringify(cells) === JSON.stringify(cells2), `level ${lv}: placement is deterministic`);
+
+  // exit is reachable: ordinary cell, not coincident with a site
+  const [ex, ez] = exitCellFor(world, lv);
+  const ec = world.cellAt(ex, ez);
+  check(!ec.special && !ec.water, `level ${lv}: exit on an ordinary cell`);
+  check(!keys.has(`${ex},${ez}`), `level ${lv}: exit distinct from every site`);
+
+  // objectiveSites wraps cells with stable keys
+  const sites = objectiveSites(world, lv);
+  check(sites.length === cells.length && sites.every((s) => s.key === siteKey(lv, s.cx, s.cz)),
+    `level ${lv}: objectiveSites keys are stable`);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\nco-op objective tracker');
+{
+  // level 0: 3 sites
+  const t = new ObjectiveTracker(0);
+  check(!t.isComplete(), 'fresh tracker is incomplete');
+  check(t.progress() < 1, 'fresh tracker progress < 1');
+  const siteKeys = objectiveSites(new WorldModel(7, 0), 0).map((s) => s.key);
+  check(siteKeys.length === 3, 'level 0 has 3 sites');
+  check(t.activateSite(siteKeys[0]) === 0, 'first activation reveals beat 0');
+  check(t.activateSite(siteKeys[0]) === -1, 're-activating a site is a no-op');
+  check(t.activateSite(siteKeys[1]) === 1, 'second activation reveals beat 1');
+  check(!t.isComplete(), 'still incomplete with 2/3 sites');
+  t.activateSite(siteKeys[2]);
+  check(t.isComplete(), 'complete after all sites');
+
+  // snapshot/apply roundtrip (relayed to peers)
+  const snap = t.snapshot();
+  const t2 = new ObjectiveTracker(0);
+  t2.apply(snap);
+  check(t2.isComplete(), 'snapshot restores completion on a peer');
+  check(JSON.stringify(t2.snapshot().site.sort()) === JSON.stringify(t.snapshot().site.sort()),
+    'snapshot site set round-trips');
+}
+
+// ---------------------------------------------------------------------------
+console.log('\nsurvive objective (level 6)');
+{
+  const t = new ObjectiveTracker(FINAL_LEVEL);
+  const siteKeys = objectiveSites(new WorldModel(9, FINAL_LEVEL), FINAL_LEVEL).map((s) => s.key);
+  // survive must NOT tick until every site objective is done
+  t.update(10);
+  check(t.holdT === 0, 'hold does not tick before sites are done');
+  for (const k of siteKeys) t.activateSite(k);
+  check(!t.isComplete(), 'level 6 still incomplete with sites done but hold not elapsed');
+  for (let i = 0; i < 200; i++) t.update(0.5); // 100s > 75s requirement
+  check(t.isComplete(), 'level 6 complete once sites done + hold satisfied');
+  const t2 = new ObjectiveTracker(FINAL_LEVEL);
+  for (const k of siteKeys) t2.activateSite(k);
+  check(!t2.isComplete(), 'level 6 incomplete before the hold elapses');
+  for (let i = 0; i < 200; i++) t2.update(0.5); // 100s > 75s requirement
+  check(t2.holdT >= 75, `hold accumulated (${t2.holdT.toFixed(1)}s)`);
+  check(t2.isComplete(), 'level 6 complete after holding');
+  const lines = t2.hudLines();
+  check(lines.length === planFor(FINAL_LEVEL).length, 'HUD lines cover every objective');
+}
+
+// ---------------------------------------------------------------------------
+console.log('\nstory spine');
+for (const lv of LEVELS) {
+  check(STORY[lv], `story exists for level ${lv}`);
+  check(introFor(lv).length >= 1, `level ${lv}: has an intro`);
+  check(beatsFor(lv).length >= 1, `level ${lv}: has story beats`);
+  check(epilogueFor(lv).length >= 1, `level ${lv}: has an epilogue`);
+  check(ambientFor(lv, 0).length > 0, `level ${lv}: has ambient lines`);
+  check(levelTitle(lv).length > 0, `level ${lv}: has a title`);
+  check(typeof beatFor(lv, 99) === 'string', `level ${lv}: beatFor wraps safely`);
+}
+check(nextStoryLevel(0) === 1, 'story chains 0 -> 1');
+check(nextStoryLevel(5) === 6, 'story chains 5 -> 6');
+check(nextStoryLevel(FINAL_LEVEL) === null, 'story ends after the final level');
+check(isFinalLevel(FINAL_LEVEL) && !isFinalLevel(0), 'isFinalLevel is correct');
+check(LEVEL_ORDER[LEVEL_ORDER.length - 1] === FINAL_LEVEL, 'LEVEL_ORDER ends at the finale');
+check(storyFor(999) === STORY[0], 'storyFor falls back to level 0');
+
+// ---------------------------------------------------------------------------
+console.log('\nending script');
+check(ENDING.stages.length >= 6, 'ending has multiple stages');
+let ordered = true;
+for (let i = 1; i < ENDING.stages.length; i++) if (ENDING.stages[i].at < ENDING.stages[i - 1].at) ordered = false;
+check(ordered, 'ending stages are time-ordered');
+check(ENDING.stages.every((s) => s.key && s.card), 'every ending stage has a key + card');
+// the twist must be present and land after the false-safety beat
+const keys = ENDING.stages.map((s) => s.key);
+check(keys.includes('reveal'), 'ending includes the reveal');
+check(keys.indexOf('reveal') > keys.indexOf('others') || keys.indexOf('reveal') > keys.indexOf('horizon'),
+  'the reveal lands after the "safe" beat');
+check(ENDING.tail.length >= 1, 'ending has tail lines');
+// the twist (the REC light surviving) must be signposted
+check(ENDING.stages.some((s) => /REC/i.test(s.card)), 'ending signposts the surviving REC light');
+
+console.log(`\n${pass} passed, ${fail} failed`);
