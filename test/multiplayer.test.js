@@ -115,6 +115,19 @@ async function main() {
     await sleep(400);
     const replayed = (late.room.events || []).some((m) => m.kind === 'puzzle' && m.data.key === 'pz:0:3,-2');
     assert(replayed, 'puzzle key replayed to a late joiner');
+
+    // flares are reserved world events: relayed live AND re-lit for late joiners
+    const flMark = b.msgs.length;
+    a.ws.send(JSON.stringify({ t: 'ev', kind: 'flare', data: { x: 12.5, z: -3.25, key: 'flare:42' } }));
+    await sleep(300);
+    assert(b.msgs.slice(flMark).some((m) => m.t === 'ev' && m.kind === 'flare' && m.data.key === 'flare:42'),
+      'flare drop relayed to the party');
+    const late2 = await connect('LATE2');
+    late2.ws.send(JSON.stringify({ t: 'join', code: a.room.code }));
+    await sleep(400);
+    const lateFl = (late2.room.events || []).some((m) => m.kind === 'flare' && m.data.key === 'flare:42');
+    assert(lateFl, 'flare replayed to a late joiner');
+    late2.ws.close();
     late.ws.close();
 
     // 10. connection drop -> rejoin with session token

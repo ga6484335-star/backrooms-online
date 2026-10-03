@@ -86,6 +86,8 @@ let exposure = 0;               // standing hazard exposure (0..1) -> drains
 let hazardState = { active: false, warn: false, inside: false, label: null };
 let lootTaken = 0;              // loot items recovered this run (HUD/debug)
 let lootTakenKeys = new Set();  // loot interactable ids already taken (relayed)
+let inventory = { flare: 0 };   // consumable items the local player is carrying
+let flares = [];                // active flares: { group, light, t, x, z, pid, key }
 
 // ---- level hazard helper: the shared blackout material for level 5 --------
 function panelMaterial() {
@@ -332,6 +334,14 @@ net.on('ev', (m) => {
       }
       break;
     }
+    case 'flare': {
+      // a teammate lit a flare — everyone sees the light (and the attention)
+      if (m.data && Number.isFinite(m.data.x) && Number.isFinite(m.data.z)) {
+        dropFlare(true, m.data.pid ?? m.from, m.data.x, m.data.z, m.data.key);
+        flashText(`${net.players.get(m.from)?.name || 'SOMEONE'} LIT A FLARE.`);
+      }
+      break;
+    }
     case 'caught': {
       // someone was caught — if it was us, death flow runs locally via onCaught
       if (m.data.pid === -1 || m.data.pid === net.id) {
@@ -497,6 +507,9 @@ function applyWorldReplay(m) {
     } else if (ev.kind === 'loot' && ev.data.id) {
       lootTakenKeys.add(ev.data.id);
       if (worldMgr) worldMgr.removeInteractable(ev.data.id);
+    } else if (ev.kind === 'flare' && Number.isFinite(ev.data.x) && Number.isFinite(ev.data.z)) {
+      // a flare was lit before we joined — re-light it (reserved, not deterministic)
+      spawnFlare(ev.data.pid, ev.data.x, ev.data.z, ev.data.key);
     } else if (ev.kind === 'puzzle' && ev.data.key && objectives) {
       objectives.collectPuzzle(ev.data.key);
       if (worldMgr) worldMgr.removeInteractable(ev.data.key);
@@ -555,6 +568,7 @@ function startGame(seed, level, opts = {}) {
   keyInventory = new Set();
   exposure = 0; lootTaken = 0;
   lootTakenKeys = new Set();
+  clearFlares();
   hazardCellsSet = new Set((hazardCells(world, level) || []).map(([cx, cz]) => `${cx},${cz}`));
 
   monsters.onNearCallback = (m, d) => {
@@ -834,6 +848,7 @@ function enterLevel(level) {
   exitUnlocked = false;
   exposure = 0; lootTaken = 0;
   lootTakenKeys = new Set();
+  clearFlares();
   hazardCellsSet = new Set((hazardCells(world, level) || []).map(([cx, cz]) => `${cx},${cz}`));
   monsters.director.level = level;
   const levelDef = getLevel(level);
@@ -1229,11 +1244,79 @@ function takeLoot(it) {
     if (flash) flash.addBattery();
     flashText('SPARE CELL — BEAM RECHARGED');
     audio.buzz(it.x, it.z, 0.5);
+  } else if (it.effect === 'flare') {
+    inventory.flare++;
+    flashText('ROAD FLARE — PRESS [G] TO LIGHT IT');
+    audio.keyPick();
   } else {
     // a recorder: the clue reads out in the same overlay as a lore cache
     showLore({ label: it.label || 'FIELD RECORDER', lore: it.lore });
   }
   if (hazardState.inside) flashText('YOU STOPPED FOR THAT.');
+}
+
+// ---- flares: consumable light that is also a dinner bell -------------------
+// A lit flare floods a small radius with warm light, so the dark — and the
+// monsters that fear it — have to back up. But it burns loud, so anything
+// hunting by sound converges on it. Co-op: everyone sees every flare, and the
+// whole party eats the attention it attracts. Drops are reserved, not
+// deterministic, because the attract is a momentary event (no shared PRNG use).
+function spawnFlare(pid, x, z, key) {
+  const group = new THREE.Group();
+  group.position.set(x, 0.08, z);
+  const stick = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.03, 0.03, 0.34, 8),
+    new THREE.MeshStandardMaterial({ color: 0xb23a2a, roughness: 0.7, emissive: 0xff3a12, emissiveIntensity: 0.8 }),
+  );
+  stick.rotation.z = Math.PI / 2.4;
+  group.add(stick);
+  const light = new THREE.PointLight(0xff7a2a, 7.5, 26, 1.6);
+  light.position.y = 0.5;
+  group.add(light);
+  scene.add(group);
+  const f = { group, light, t: 0, life: 45, x, z, pid, key };
+  flares.push(f);
+  return f;
+}
+
+function clearFlares() {
+  for (const f of flares) { scene.remove(f.group); disposeGroup(f.group); }
+  flares = [];
+}
+
+function dropFlare(remote, pid, x, z, key) {
+  if (!remote) {
+    if (inventory.flare <= 0) { flashText('NO FLARES — SEARCH THE HAZARDS'); return; }
+    inventory.flare--;
+    if (key) key = `${key}:${Date.now()}`;
+    net.sendEvent('flare', { x: +x.toFixed(2), z: +z.toFixed(2), key });
+  }
+  spawnFlare(pid, x, z, key || `flare:${Date.now()}`);
+  if (monsters && monsters.escalate) monsters.escalate(1.1, 0.05);
+  if (monsters && monsters.alertArea) monsters.alertArea(x, z, 34);
+  audio.distantMetal(0.7);
+}
+
+function updateFlares(dt) {
+  for (let i = flares.length - 1; i >= 0; i--) {
+    const f = flares[i];
+    f.t += dt;
+    const lifeK = Math.max(0, 1 - f.t / f.life);
+    const flick = 0.75 + 0.25 * Math.sin(f.t * 13 + f.x);
+    f.light.intensity = 7.5 * lifeK * flick;
+    if (f.t > f.life * 0.6) f.light.color.setRGB(1, 0.42 * lifeK + 0.1, 0.09); // cooling
+    if (f.t >= f.life) {
+      scene.remove(f.group);
+      disposeGroup(f.group);
+      flares.splice(i, 1);
+    }
+  }
+}
+
+function disposeGroup(g) {
+  g.traverse((o) => {
+    if (o.isMesh) { o.geometry.dispose(); if (o.material && o.material.dispose) o.material.dispose(); }
+  });
 }
 
 // ---- exit gate: advance the whole party together ----------------------------
@@ -1407,6 +1490,11 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyQ') doScream();
   if (e.code === 'KeyC') doEmote('sit'); // sit/stand toggle
   if (e.code === 'KeyF' && !dead && flash) flash.toggle();
+  if (e.code === 'KeyG' && !dead && !cinematic) {
+    const fx = player.pos.x - Math.sin(player.yaw) * 1.4;
+    const fz = player.pos.z - Math.cos(player.yaw) * 1.4;
+    dropFlare(false, net.id, fx, fz, null);
+  }
   if (e.code === 'KeyR' && dead && respawnT <= 0) respawn();
 });
 canvas.addEventListener('click', () => {
@@ -1663,6 +1751,8 @@ function updateBatteryHud() {
   const segs = Math.round(flash.battery / 25);
   el.textContent = '▮'.repeat(segs) + '▯'.repeat(4 - segs);
   el.classList.toggle('low', flash.battery < 25);
+  // consumables ride alongside the battery readout: ×N flares in the pocket
+  if (inventory.flare > 0) el.textContent += `   ✜×${inventory.flare}`;
 }
 
 // spectator camera: hover near the next living teammate (found-footage style)
@@ -1861,6 +1951,7 @@ function loop() {
   player.flashOn = flash && flash.on ? 1 : 0;
   worldMgr.ensure(player.pos.x, player.pos.z);
   worldMgr.updateDoors(dt);
+  updateFlares(dt);
   registerChunkLights();
   lightMgr.update(dt, player.pos.x, player.pos.z, camera);
   if (flash) flash.update(dt);
@@ -2000,6 +2091,8 @@ function leaveToMenu() {
   exposure = 0;
   lootTaken = 0;
   lootTakenKeys = new Set();
+  clearFlares();
+  inventory = { flare: 0 };
   hazardState = { active: false, warn: false, inside: false, label: null };
   if (world) { const lp = panelMaterial(); if (lp) lp.opacity = 1; }
   E('lore-overlay') && E('lore-overlay').classList.add('hidden');
@@ -2081,6 +2174,13 @@ window.__dbg = {
     kind: lootKindFor(world.level, cx, cz),
   })) : []),
   lootTakenList: () => [...lootTakenKeys],
+  inventory: () => ({ ...inventory }),
+  flares: () => flares.map((f) => ({ x: +f.x.toFixed(2), z: +f.z.toFixed(2), t: +f.t.toFixed(2), pid: f.pid })),
+  dropFlare: () => {
+    const fx = player.pos.x - Math.sin(player.yaw) * 1.4;
+    const fz = player.pos.z - Math.cos(player.yaw) * 1.4;
+    dropFlare(false, net.id, fx, fz, null);
+  },
   setExposure: (v) => { exposure = Math.max(0, Math.min(1, v)); },
   setElapsed: (v) => { startTime = performance.now() - v * 1000; },
   loreOpen: () => loreOverlayOpen,
@@ -2135,6 +2235,7 @@ window.__dbg = {
     collectPuzzle(pz); // exercises the real relay + remove path
     return objectives.puzzleDone();
   },
+  giveFlare: (n = 1) => { inventory.flare += n; updateBatteryHud(); return inventory.flare; },
   startEnding: () => startEnding(),
   endEnding: () => endEnding(),
   flash: () => (flash ? { on: flash.on, battery: flash.battery } : null),
@@ -2168,6 +2269,7 @@ window.__dbg = {
   monsters: () => (monsters ? monsters.monsters.size : 0),
   monsterTypes: () => (monsters ? [...monsters.monsters.values()].map((m) => `${m.type}:${m.state}`) : []),
   monsterIds: () => (monsters ? [...monsters.monsters.keys()] : []),
+  monsterTension: () => (monsters ? (monsters.tension || 0) : 0),
   monsterDiag: () => {
     if (!monsters) return null;
     return [...monsters.monsters.values()].map((m) => {
@@ -2269,6 +2371,9 @@ window.addEventListener('touchstart', () => {
     if (gameState === 'playing' && !mobile) {
       mobile = new MobileControls(player, doInteract, doEmote, togglePause);
       mobile.onScream = doScream;
+      mobile.onFlare = () => dropFlare(false, net.id,
+        player.pos.x - Math.sin(player.yaw) * 1.4,
+        player.pos.z - Math.cos(player.yaw) * 1.4, null);
       mobile.show();
     }
   }

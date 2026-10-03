@@ -158,7 +158,7 @@ class Room {
 // Events that change persistent world/level state must be replayed to late
 // joiners and reconnecting players. Progression events (objective sites, level
 // advances, the finale) are included so co-op state never desyncs.
-const WORLD_EVENTS = new Set(['reldoor', 'chunkmorph', 'lightdie', 'spawnmonster', 'caught', 'died', 'respawn', 'door', 'keypickup', 'battpickup', 'obj', 'cache', 'loot', 'puzzle', 'advance', 'ending', 'noclip']);
+const WORLD_EVENTS = new Set(['reldoor', 'chunkmorph', 'lightdie', 'spawnmonster', 'caught', 'died', 'respawn', 'door', 'keypickup', 'battpickup', 'obj', 'cache', 'loot', 'puzzle', 'flare', 'advance', 'ending', 'noclip']);
 
 function pickColor(i) {
   const colors = ['#d9b46c', '#8fa3c7', '#a3c78f', '#c78f8f', '#b48fd9', '#7ec8c8', '#c7b1a0', '#9ec78f'];

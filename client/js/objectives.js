@@ -366,7 +366,10 @@ export function hazardDps(level) {
 // cell, and the lore/effect is chosen per level so the reward is story-flavoured.
 export function lootKindFor(level, cx, cz) {
   const rng = rngFrom(hashStr((level + 1) >>> 0, `loot:${cx},${cz}`));
-  return rng() < 0.5 ? 'battery' : 'recorder';
+  const r = rng();
+  if (r < 0.34) return 'battery';
+  if (r < 0.67) return 'recorder';
+  return 'flare';
 }
 
 export const LOOT = {
@@ -380,6 +383,12 @@ export const LOOT = {
     effect: 'clue',
     body: 'A palm recorder, running. It is a voice you know — yours — calmly describing a room '
       + 'you have not reached yet. It knows what happens next. It will not say how it ends.',
+  },
+  flare: {
+    label: 'ROAD FLARE',
+    effect: 'flare',
+    body: 'A road flare, still sealed. Strike it and the dark has to step back — but everything '
+      + 'that hunts by sound will turn its head toward the light.',
   },
 };
 

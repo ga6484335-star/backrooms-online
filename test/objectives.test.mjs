@@ -7,7 +7,7 @@ import {
   objectiveSites, exitCellFor, ObjectiveTracker,
   CACHE_PLANS, cachePlanFor, cacheCellFor, anyCacheCellFor, cacheKey,
   loreCacheFor, loreFor, LORE, LORE_TRUTH, cacheHintFor, CACHE_HINTS,
-  hazardFor, hazardCells, hazardPhase, hazardDps, lootKindFor, lootFor, HAZARDS,
+  hazardFor, hazardCells, hazardPhase, hazardDps, lootKindFor, lootFor, LOOT, HAZARDS,
   PUZZLES, puzzleFor, puzzlePlanFor, puzzleGoal, puzzleCells, puzzleSites, puzzleKey,
 } from '../client/js/objectives.js';
 import {
@@ -306,8 +306,10 @@ console.log('\nhazard loot (risk / reward)');
       }
     }
   }
-  check(kinds.has('battery') && kinds.has('recorder'), 'loot pool includes both batteries and recorders');
+  check(kinds.has('battery') && kinds.has('recorder') && kinds.has('flare'),
+    'loot pool includes batteries, recorders and flares');
   check(lootFor('nope') === lootFor('battery'), 'unknown loot falls back to battery');
+  check(LOOT.flare.effect === 'flare' && /flare/i.test(LOOT.flare.label), 'flare loot carries a flare effect');
 }
 
 // ---------------------------------------------------------------------------

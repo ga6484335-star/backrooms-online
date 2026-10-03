@@ -265,6 +265,21 @@ async function main() {
     await cdp.eval(`window.__dbg.closeLore()`);
     await cdp.eval(`window.__dbg.skipCinematic()`);
 
+    // ---- flares: consumable light that draws the monsters ------------------
+    check((await cdp.eval(`window.__dbg.inventory().flare`)) === 0, 'party starts with no flares');
+    check((await cdp.eval(`window.__dbg.giveFlare(2)`)) === 2, 'flare picked up into the inventory');
+    check((await cdp.eval(`window.__dbg.flares().length`)) === 0, 'no flare burning before it is lit');
+    await cdp.eval(`window.__dbg.dropFlare()`);
+    await sleep(300);
+    const lit = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.flares())`));
+    check(lit.length === 1, `lighting a flare spawns a live light (${lit.length})`);
+    check((await cdp.eval(`window.__dbg.inventory().flare`)) === 1, 'lighting a flare consumes one');
+    check((await cdp.eval(`window.__dbg.monsterTension()`)) > 0, 'a lit flare raises monster tension');
+    // no flares left to burn -> the request is refused, not crashed
+    await cdp.eval(`window.__dbg.dropFlare()`);
+    await sleep(200);
+    check((await cdp.eval(`window.__dbg.inventory().flare`)) === 0, 'a second flare consumes the last one');
+
     // standing in an active hazard cell steadily raises exposure. Cells can sit
     // next to props, so try each until the player actually stands inside one.
     let insideOK = false;
