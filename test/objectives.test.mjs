@@ -9,6 +9,7 @@ import {
 import {
   STORY, ENDING, LEVEL_ORDER, FINAL_LEVEL, storyFor, introFor, epilogueFor,
   beatsFor, beatFor, ambientFor, levelTitle, nextStoryLevel, isFinalLevel,
+  OPENING, OPENING_DURATION, openingLine, openingLines, prerollFor,
 } from '../client/js/story.js';
 
 let pass = 0, fail = 0;
@@ -128,6 +129,38 @@ check(nextStoryLevel(FINAL_LEVEL) === null, 'story ends after the final level');
 check(isFinalLevel(FINAL_LEVEL) && !isFinalLevel(0), 'isFinalLevel is correct');
 check(LEVEL_ORDER[LEVEL_ORDER.length - 1] === FINAL_LEVEL, 'LEVEL_ORDER ends at the finale');
 check(storyFor(999) === STORY[0], 'storyFor falls back to level 0');
+
+// ---------------------------------------------------------------------------
+console.log('\nopening script');
+check(OPENING.phases.length >= 8, 'opening has all its shots');
+check(OPENING.phases.every((p) => p.key && p.dur > 0), 'every opening phase has a key + duration');
+check(OPENING.phases.every((p) => p.shot), 'every opening phase names a camera shot');
+check(OPENING.phases.every((p) => (p.lines || []).length >= 1), 'every opening phase has dialogue');
+// normalise: opening lines may be strings or {text, voice}
+const norm = (p) => (p.lines || []).map((l) => (typeof l === 'string' ? { text: l, voice: 'default' } : l));
+check(OPENING_DURATION > 60 && OPENING_DURATION < 140, `opening is feature-length-ish (${OPENING_DURATION}s)`);
+check(OPENING.phases.some((p) => p.key === 'street'), 'opening begins on the ordinary street');
+check(OPENING.phases.some((p) => p.key === 'tear'), 'opening includes the reality tear');
+check(OPENING.phases.some((p) => p.key === 'fall'), 'opening includes the fall');
+check(OPENING.phases.some((p) => p.key === 'land'), 'opening lands in the Backrooms');
+check(OPENING.phases.some((p) => p.key === 'wake'), 'opening wakes the player');
+// the twist: the falling has a rhythm — it is a recording being played back
+check(norm(OPENING.phases.find((p) => p.key === 'fall')).some((l) => /PLAYED BACK/i.test(l.text)),
+  'opening plants the "played back" reveal');
+check(OPENING.phases.some((p) => p.key === 'stare'), 'opening includes the figure / observer beat');
+// the voice: every opening line carries a mood the VoiceEngine understands
+const MOODS = ['default', 'calm', 'tired', 'uneasy', 'dread', 'whisper', 'radio', 'machine'];
+let moodsOK = true;
+for (const p of OPENING.phases) for (const l of norm(p)) if (!MOODS.includes(l.voice)) moodsOK = false;
+check(moodsOK, 'every opening line has a known voice mood');
+check(openingLines(OPENING.phases[0]).every((l) => l.text && l.voice), 'openingLines normalises to {text,voice}');
+check(typeof openingLine('PLAIN') === 'object' && openingLine('PLAIN').text === 'PLAIN', 'openingLine accepts plain strings');
+// every preroll chapter has voiced lines too
+for (const lv of LEVELS) {
+  const pre = prerollFor(lv);
+  check(pre.kind && pre.card, `preroll ${lv}: has a kind + card`);
+  check((pre.lines || []).length >= 1, `preroll ${lv}: has lines`);
+}
 
 // ---------------------------------------------------------------------------
 console.log('\nending script');

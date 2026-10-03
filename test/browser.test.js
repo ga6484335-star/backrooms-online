@@ -316,17 +316,38 @@ async function main() {
     })()`);
     check(jumpTest && jumpTest.ok === true, 'jump works: airborne, lands, no double-jump ' + JSON.stringify(jumpTest));
 
-    // 13. flashlight toggle via F
-    const flashTest = await cdp.eval(`(async () => {
+    const lighting = await cdp.eval(`(async () => {
+      // face -X so the wall/panel directly ahead is inside the beam
+      const p = window.__dbg.player;
       window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyF'}));
-      await new Promise(r => setTimeout(r, 150));
+      await new Promise(r => setTimeout(r, 450));
       const on = window.__dbg.flash();
+      // walk toward -X and sample world brightness: with the light on and the
+      // beam lagging the camera, the frame should be brighter than lights-out
+      const sample = () => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(() => {
+        const c = document.getElementById('gl');
+        const g = c.getContext('webgl2') || c.getContext('webgl');
+        if (!g) return res(null);
+        const px = new Uint8Array(4 * 400);
+        g.readPixels((g.drawingBufferWidth/2|0)-10, (g.drawingBufferHeight/2|0)-10, 20, 20, g.RGBA, g.UNSIGNED_BYTE, px);
+        let s = 0; for (let i = 0; i < 400; i++) s += px[i*4] + px[i*4+1] + px[i*4+2];
+        res(s);
+      })));
+      const lit = await sample();
       window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyF'}));
-      await new Promise(r => setTimeout(r, 150));
+      await new Promise(r => setTimeout(r, 450));
       const off = window.__dbg.flash();
-      return { on: on && on.on, off: off && !off.on };
+      const dark = await sample();
+      const cone = window.__dbg.flashlightCone();
+      return { on: on && on.on, off: off && !off.on, cone, lit, dark, spoke: window.__dbg.voiceSupported() };
     })()`);
-    check(flashTest && flashTest.on === true && flashTest.off === true, 'flashlight toggles on/off with F');
+    check(lighting && lighting.on === true && lighting.off === true, 'flashlight toggles on/off with F');
+    check(lighting && lighting.cone && lighting.cone.angle > 0.1 && lighting.cone.angle < 0.35,
+      'flashlight beam is a tight cone, not a wide flap (' + JSON.stringify(lighting.cone && lighting.cone.angle) + ')');
+    check(lighting && lighting.cone && lighting.cone.spillAngle > lighting.cone.angle,
+      'flashlight has a wider spill halo around the beam');
+    check(lighting && lighting.cone && lighting.cone.decay === 2,
+      'flashlight uses physical (inverse-square) falloff');
 
     // console errors? (filter out expected WebGL-unavailable noise when headless
     // has no GL — the app surviving is the actual assertion)

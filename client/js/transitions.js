@@ -9,7 +9,7 @@
 // no extra network state is needed.
 // ============================================================================
 import * as THREE from 'three';
-import { prerollFor } from './story.js';
+import { prerollFor, openingLine } from './story.js';
 
 export class TransitionSequence {
   constructor(scene, camera, player, engine, audio, level, opts = {}) {
@@ -18,6 +18,7 @@ export class TransitionSequence {
     this.player = player;
     this.engine = engine;
     this.audio = audio;
+    this.voice = opts.voice || null;
     this.level = level;
     this.script = prerollFor(level);
     this.kind = this.script.kind;
@@ -25,13 +26,16 @@ export class TransitionSequence {
     this.onLine = opts.onLine || (() => {});
     this.onHint = opts.onHint || (() => {});
     this.onDone = opts.onDone || (() => {});
-    this.dur = { fall: 8.5, door: 7, lurch: 8, flood: 8.5, wake: 7.5, elevator: 7.5, ascent: 9 }[this.kind] || 7.5;
+    this.dur = { fall: 9, door: 7.5, lurch: 8.5, flood: 9, wake: 8, elevator: 8, ascent: 9.5 }[this.kind] || 8;
     this.t = 0;
     this.lineIdx = 0;
     this.typed = 0;
     this.done = false;
     this._fired = false;
+    this._voicedAt = -1;
+    this._lines = (this.script.lines || []).map(openingLine);
     this._flash = 1; // 1 = black, 0 = clear (local overlay alpha)
+    this._baseFov = camera.fov;
 
     this._look = REVEALS[this.kind] || REVEALS.fall;
     this._saved = {
@@ -46,6 +50,7 @@ export class TransitionSequence {
     this.onCard(this.script.card || null);
     this.onHint(true);
     this._sfx();
+    this._voiceLine(0);
   }
 
   _build() {
@@ -101,19 +106,29 @@ export class TransitionSequence {
   update(dt) {
     if (this.done) return;
     this.t += dt;
-    const lines = this.script.lines || [];
-    const full = lines[this.lineIdx] || '';
+    const lines = this._lines;
+    const full = lines[this.lineIdx] ? lines[this.lineIdx].text : '';
     if (full) {
       this.typed = Math.min(full.length, this.typed + dt * 30);
-      this.onLine(full.slice(0, this.typed | 0));
+      this.onLine(full.slice(0, this.typed | 0), lines[this.lineIdx].voice);
     }
     const per = Math.max(1.5, (this.dur - 1.5) / Math.max(1, lines.length));
     if (this.lineIdx < lines.length - 1 && this.typed >= full.length && this.t >= per * (this.lineIdx + 1)) {
       this.lineIdx++; this.typed = 0;
+      this._voiceLine(this.lineIdx);
     }
 
     this._animate(dt);
     if (this.t >= this.dur) { this.done = true; this.onDone(); }
+  }
+
+  _voiceLine(idx) {
+    if (!this.voice || idx === this._voicedAt) return;
+    const line = this._lines && this._lines[idx];
+    if (!line) return;
+    this._voicedAt = idx;
+    this.voice.speak(line.text, { mood: line.voice });
+    if (line.voice === 'whisper' && this.audio && this.audio.whisper) this.audio.whisper(1.2);
   }
 
   _animate(dt) {
@@ -183,6 +198,8 @@ export class TransitionSequence {
   }
 
   dispose() {
+    this.voice && this.voice.stop();
+    if (this.camera) this.camera.fov = this._baseFov;
     for (const o of [this._sheet, ...(this._streaks || []), this._doorL, this._doorR].filter(Boolean)) {
       o.parent && o.parent.remove(o);
       if (o.geometry) o.geometry.dispose();

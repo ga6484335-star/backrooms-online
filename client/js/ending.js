@@ -25,6 +25,7 @@ export class EndingSequence {
     this.player = player;
     this.engine = engine;
     this.audio = audio;
+    this.voice = opts.voice || null;
     this.onCard = opts.onCard || (() => {});
     this.onDone = opts.onDone || (() => {});
     this.onTail = opts.onTail || (() => {});
@@ -133,6 +134,8 @@ export class EndingSequence {
     if (this._cards.has(st.key)) return;
     this._cards.add(st.key);
     this.onCard(st.card, st);
+    // the finale is the Archivist speaking — voice it with the machine mood
+    if (this.voice && st.card) this.voice.speak(st.card, { mood: st.key === 'end' ? 'machine' : 'whisper' });
     if (st.glitch && this.engine && this.engine.bumpGlitch) this.engine.bumpGlitch(st.glitch);
   }
 
@@ -196,6 +199,7 @@ export class EndingSequence {
   }
 
   dispose() {
+    this.voice && this.voice.stop();
     this.scene.remove(this.group);
     this.group.traverse((o) => {
       if (o.isMesh) { o.geometry.dispose(); if (o.material && o.material.dispose) o.material.dispose(); }

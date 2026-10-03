@@ -986,4 +986,96 @@ export class AudioEngine {
     }
     this.doorCreak(0, 0);
   }
+
+  // reality tearing: a brittle rip with an inhale of reversed air
+  tear(dur = 1.4) {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const s = ctx.createBufferSource(); s.buffer = this._noiseBuf; s.loop = true;
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass';
+    hp.frequency.setValueAtTime(400, t);
+    hp.frequency.exponentialRampToValueAtTime(4200, t + dur * 0.55);
+    hp.frequency.exponentialRampToValueAtTime(300, t + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.32, t + dur * 0.4);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(hp).connect(g).connect(this.master);
+    s.start(t); s.stop(t + dur + 0.05);
+    // a low elastic creak under the rip
+    const o = ctx.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(60, t);
+    o.frequency.linearRampToValueAtTime(30, t + dur);
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 300;
+    const og = ctx.createGain(); this._env(og, t, 0.02, dur * 0.9, 0.22);
+    o.connect(lp).connect(og).connect(this.master);
+    o.start(t); o.stop(t + dur + 0.05);
+  }
+
+  // a breath of radio hiss — used under radio scraps and as a voice fallback
+  radioStatic(dur = 1.4) {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const s = ctx.createBufferSource(); s.buffer = this._noiseBuf; s.loop = true;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(1800, t); bp.Q.value = 0.7;
+    bp.frequency.linearRampToValueAtTime(2600, t + dur * 0.5);
+    bp.frequency.linearRampToValueAtTime(1500, t + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.05, t + 0.08);
+    g.gain.setValueAtTime(0.05, t + dur * 0.7);
+    g.gain.linearRampToValueAtTime(0.0001, t + dur);
+    // slow amplitude chatter like a detuning receiver
+    const lfo = ctx.createOscillator(); lfo.frequency.value = 7.5;
+    const lfoG = ctx.createGain(); lfoG.gain.value = 0.02;
+    lfo.connect(lfoG).connect(g.gain);
+    s.connect(bp).connect(g).connect(this.master);
+    s.start(t); lfo.start(t); s.stop(t + dur + 0.05); lfo.stop(t + dur + 0.05);
+  }
+
+  // an unintelligible whisper very close to the ear
+  whisper(dur = 1.6) {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const s = ctx.createBufferSource(); s.buffer = this._noiseBuf; s.loop = true;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(900, t); bp.Q.value = 1.4;
+    bp.frequency.linearRampToValueAtTime(1500, t + dur * 0.5);
+    bp.frequency.linearRampToValueAtTime(700, t + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.035, t + 0.12);
+    g.gain.linearRampToValueAtTime(0.0001, t + dur);
+    // syllable-like gating gives it the shape of speech without words
+    const lfo = ctx.createOscillator(); lfo.type = 'square'; lfo.frequency.value = 5.2;
+    const lfoG = ctx.createGain(); lfoG.gain.value = 0.012;
+    lfo.connect(lfoG).connect(g.gain);
+    s.connect(bp).connect(g).connect(this.master);
+    s.start(t); lfo.start(t); s.stop(t + dur + 0.05); lfo.stop(t + dur + 0.05);
+  }
+
+  // a small handheld switch: a soft plastic tick, plus a faint relay for ON
+  flashlight(on) {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const s = ctx.createBufferSource(); s.buffer = this._noiseBuf;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass';
+    f.frequency.value = on ? 2200 : 1700; f.Q.value = 6;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.16, t);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 0.035);
+    s.connect(f).connect(g).connect(this.master);
+    s.start(t, Math.random(), 0.05);
+    if (on) {
+      // a hair of electrical onset so switching on has a body
+      const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = 1300;
+      const og = ctx.createGain();
+      og.gain.setValueAtTime(0.0001, t);
+      og.gain.exponentialRampToValueAtTime(0.03, t + 0.01);
+      og.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+      o.connect(og).connect(this.master);
+      o.start(t); o.stop(t + 0.1);
+    }
+  }
 }

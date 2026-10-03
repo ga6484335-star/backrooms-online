@@ -77,6 +77,7 @@ export class MenuUI {
       if (s.sens) E('set-sens').value = s.sens;
       if (s.volume !== undefined) E('set-volume').value = s.volume;
       if (s.vhs !== undefined) E('set-vhs').value = String(s.vhs);
+      if (s.voice !== undefined) E('set-voice').value = String(s.voice ? '1' : '0');
       if (s.name) E('name-input').value = s.name;
     } catch (e) {}
   }
@@ -98,6 +99,7 @@ export class MenuUI {
       sens: parseFloat(E('set-sens').value),
       volume: parseFloat(E('set-volume').value),
       vhs: E('set-vhs').value === '1',
+      voice: E('set-voice').value === '1',
     };
   }
 

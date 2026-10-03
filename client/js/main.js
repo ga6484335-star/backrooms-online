@@ -26,6 +26,7 @@ import { introFor, epilogueFor, beatFor, ambientFor, radioFor, nextStoryLevel, i
 import { EndingSequence } from './ending.js';
 import { OpeningSequence } from './opening.js';
 import { TransitionSequence } from './transitions.js';
+import { VoiceEngine } from './voice.js';
 import { rngFrom, hashStr } from './rng.js';
 
 // ---------------------------------------------------------------------------
@@ -38,6 +39,7 @@ const camera = engine.camera;
 // fall streaks, flashes) render — three.js ignores cameras as draw objects
 scene.add(camera);
 const audio = new AudioEngine();
+const voice = new VoiceEngine(audio);
 const net = new Network();
 
 const player = new PlayerController(camera);
@@ -127,14 +129,16 @@ function loadSettings() {
       sens: s.sens || 1,
       volume: s.volume !== undefined ? s.volume : 0.8,
       vhs: s.vhs !== undefined ? !!s.vhs : true,
+      voice: s.voice !== undefined ? !!s.voice : true,
     };
   } catch (e) {
-    settings = { quality: defaultQuality(), sens: 1, volume: 0.8, vhs: true };
+    settings = { quality: defaultQuality(), sens: 1, volume: 0.8, vhs: true, voice: true };
   }
   E('set-quality').value = settings.quality;
   E('set-sens').value = settings.sens;
   E('set-volume').value = settings.volume;
   E('set-vhs').value = settings.vhs ? '1' : '0';
+  E('set-voice').value = settings.voice ? '1' : '0';
   applySettings(settings);
 }
 
@@ -144,6 +148,7 @@ function applySettings(s) {
   engine.setVHS(s.vhs);
   player.sensitivity = s.sens;
   audio.setVolume(s.volume);
+  voice.setEnabled(s.voice);
   if (worldMgr) worldMgr.setQuality(s.quality);
   if (lightMgr) lightMgr.setQuality(s.quality);
 }
@@ -597,7 +602,9 @@ function startOpening() {
   E('opening-hint').classList.add('hidden');
   E('opening-card').classList.add('hidden');
   E('opening-line').textContent = '';
+  E('opening-speaker').textContent = '';
   opening = new OpeningSequence(scene, camera, player, engine, audio, {
+    voice,
     onCard(card) {
       const el = E('opening-card');
       if (!card) { el.classList.add('hidden'); return; }
@@ -606,7 +613,10 @@ function startOpening() {
       void el.offsetWidth;
       el.classList.add('pop');
     },
-    onLine(t) { E('opening-line').textContent = t; },
+    onLine(t, mood) {
+      E('opening-line').textContent = t;
+      E('opening-speaker').textContent = t ? voice.speakerFor(mood) : '';
+    },
     onHint(show) { E('opening-hint').classList.toggle('hidden', !show); },
     onDone() { finishOpening(); },
   });
@@ -651,9 +661,11 @@ function startTransition(level) {
   E('opening-rec').classList.add('hidden');
   E('opening-hint').classList.add('hidden');
   E('opening-line').textContent = '';
+  E('opening-speaker').textContent = '';
   const cardEl = E('opening-card');
   cardEl.classList.add('hidden');
   transition = new TransitionSequence(scene, camera, player, engine, audio, level, {
+    voice,
     onCard(card) {
       if (!card) { cardEl.classList.add('hidden'); return; }
       cardEl.textContent = card;
@@ -661,7 +673,10 @@ function startTransition(level) {
       void cardEl.offsetWidth;
       cardEl.classList.add('pop');
     },
-    onLine(t) { E('opening-line').textContent = t; },
+    onLine(t, mood) {
+      E('opening-line').textContent = t;
+      E('opening-speaker').textContent = t ? voice.speakerFor(mood) : '';
+    },
     onHint(show) { E('opening-hint').classList.toggle('hidden', !show); },
     onDone() { finishTransition(level); },
   });
@@ -1175,15 +1190,16 @@ function updateObjectiveCompass(dt) {
 // ---- cinematic typewriter overlay ------------------------------------------
 // Shows `lines` one at a time typed out; after the last line + a beat, calls
 // `onDone`. Gameplay continues underneath (menus/HUD stay interactive after).
-function showCinematic(lines, pace = 3, onDone = null) {
+function showCinematic(lines, pace = 3, onDone = null, mood = 'machine') {
   if (!lines || !lines.length) { if (onDone) onDone(); return; }
   cinematic = {
     lines: lines.slice(), i: 0, t: 0, typed: 0,
-    cps: 34, minT: 1.6 + pace, onDone,
+    cps: 34, minT: 1.6 + pace, onDone, mood, spoken: -1,
   };
   const ov = E('cinematic-overlay');
   if (ov) ov.classList.remove('hidden');
   E('cinematic-line').textContent = '';
+  E('cinematic-speaker').textContent = '';
   E('cinematic-hint').classList.add('hidden');
   // NOTE: deliberately non-blocking — in co-op you must keep moving even while
   // the story narrates. The overlay is atmospheric, not a cutscene prison.
@@ -1193,6 +1209,11 @@ function updateCinematic(dt) {
   if (!cinematic) return;
   const c = cinematic;
   const full = c.lines[c.i] || '';
+  if (c.spoken !== c.i) {
+    c.spoken = c.i;
+    voice.speak(full, { mood: c.mood });
+    E('cinematic-speaker').textContent = full ? voice.speakerFor(c.mood) : '';
+  }
   c.t += dt;
   c.typed = Math.min(full.length, c.typed + dt * c.cps);
   E('cinematic-line').textContent = full.slice(0, c.typed | 0);
@@ -1209,6 +1230,7 @@ function updateCinematic(dt) {
       if (cb) cb();
     } else {
       E('cinematic-line').textContent = '';
+      E('cinematic-speaker').textContent = '';
       E('cinematic-hint').classList.add('hidden');
     }
   }
@@ -1218,6 +1240,7 @@ function skipCinematic() {
   if (!cinematic) return;
   const cb = cinematic.onDone;
   cinematic = null;
+  voice.stop();
   E('cinematic-overlay').classList.add('hidden');
   if (!dead && gameState === 'playing' && !paused && !ending) player.enabled = true;
   if (cb) cb();
@@ -1252,6 +1275,7 @@ function startEnding() {
   E('ending-tail').classList.add('hidden');
   E('ending-tail').innerHTML = '';
   ending = new EndingSequence(scene, camera, player, engine, audio, {
+    voice,
     onCard(card, st) { showEndingCard(card, st); },
     onTail(lines) {
       const el = E('ending-tail');
@@ -1628,6 +1652,7 @@ function leaveToMenu() {
   E('ending-overlay').classList.add('hidden');
   noteOverlayOpen = false;
   cinematic = null;
+  voice.stop();
   objectives = null;
   exitUnlocked = false;
   // re-arm the cold open for the next fresh session
@@ -1714,6 +1739,29 @@ window.__dbg = {
   startEnding: () => startEnding(),
   endEnding: () => endEnding(),
   flash: () => (flash ? { on: flash.on, battery: flash.battery } : null),
+  // flashlight shape + held-lag state (for tests: the beam must be narrow and
+  // must trail the camera)
+  flashlightCone: () => (flash ? {
+    angle: flash.spot.angle,
+    penumbra: flash.spot.penumbra,
+    distance: flash.spot.distance,
+    decay: flash.spot.decay,
+    spillAngle: flash.spill.angle,
+    aim: [flash._aim.x, flash._aim.y, flash._aim.z],
+  } : null),
+  voiceSpeaking: () => voice.speaking,
+  voiceSupported: () => voice.supported,
+  voiceEnabled: () => voice.enabled,
+  speaking: () => voice.speaking,
+  speakerFor: (mood) => voice.speakerFor(mood),
+  // story-mode internals (tests drive these deterministically; rAF is throttled
+  // in headless runs, so a harness needs to advance the sequences by hand)
+  cinematicActive: () => !!cinematic,
+  openActive: () => !!opening,
+  transitionActive: () => !!transition,
+  openState: () => (opening ? { phase: opening.phaseIdx, key: opening.phases[opening.phaseIdx].key, shot: opening.phases[opening.phaseIdx].shot, t: opening.t, line: opening.lineIdx, card: opening.phases[opening.phaseIdx].card } : null),
+  _tickOpen: (n, dt) => { for (let i = 0; i < n && opening && !opening.done; i++) opening.update(dt); },
+  _tickTransition: (n, dt) => { for (let i = 0; i < n && transition && !transition.done; i++) transition.update(dt); },
   monsters: () => (monsters ? monsters.monsters.size : 0),
   monsterTypes: () => (monsters ? [...monsters.monsters.values()].map((m) => `${m.type}:${m.state}`) : []),
   monsterIds: () => (monsters ? [...monsters.monsters.keys()] : []),

@@ -90,6 +90,9 @@
     <div class="setting-row"><label>VHS EFFECTS</label>
       <select id="set-vhs"><option value="1">ON</option><option value="0">OFF</option></select>
     </div>
+    <div class="setting-row"><label>VOICE DIALOGUE</label>
+      <select id="set-voice"><option value="1">ON</option><option value="0">OFF</option></select>
+    </div>
     <div class="setting-row"><label>FULLSCREEN</label>
       <button id="set-fullscreen" class="mbtn small">TOGGLE</button>
     </div>
@@ -229,6 +232,7 @@
   <div class="cine-bars"></div>
   <div id="opening-rec"><span class="opening-rec-dot"></span>REC</div>
   <div id="opening-card" class="opening-card hidden"></div>
+  <div id="opening-speaker" class="cine-speaker"></div>
   <div id="opening-line" class="cine-line"></div>
   <div id="opening-hint" class="cine-hint hidden">[ E ] SKIP</div>
 </div>
@@ -236,6 +240,7 @@
 <!-- ======================= STORY CINEMATIC ======================= -->
 <div id="cinematic-overlay" class="hidden">
   <div class="cine-bars"></div>
+  <div id="cinematic-speaker" class="cine-speaker"></div>
   <div id="cinematic-line" class="cine-line"></div>
   <div id="cinematic-hint" class="cine-hint hidden">[ E ] CONTINUE</div>
 </div>
