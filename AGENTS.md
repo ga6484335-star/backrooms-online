@@ -17,7 +17,10 @@
 - `node test/multiplayer.test.js` — server protocol, two ws clients.
 - `node test/browser.test.js` — headless Chromium + CDP, single player full flow.
 - `node test/browser2p.test.js` — two headless browsers, seed/emote/sit/jump sync.
-- Debug hooks: `window.__dbg` in main.js (state, pos, chunks, flash, remoteAnims, remoteY), `window.__seed`, `window.__lastRemoteEmote`.
+- `node test/objectives.test.mjs` — pure-Node progression/story/ending logic (157 assertions).
+- `node test/browser-objectives.test.js` — headless full progression + finale flow.
+- Debug hooks: `window.__dbg` in main.js (state, pos, chunks, flash, remoteAnims, remoteY, plus level/objectives/sites/exitPos/cinematicActive/skipCinematic/endingActive/completeObjectives/startEnding/endEnding/interact/nearInteractable/teleport), `window.__seed`, `window.__lastRemoteEmote`.
+- KNOWN HEADLESS FLAKE: the `jump`/`jump height synced` assertions in browser.test.js / browser2p.test.js are flaky in SwiftShader (baseline fails too). Not a regression.
 
 ## Hard-won lessons
 - Keyboard events in CDP tests MUST be dispatched as `new KeyboardEvent('keydown', {code:'KeyX'})` on `window` — handlers read `e.code`, not `e.key`.
@@ -38,3 +41,20 @@
 - envInteraction(): door creaks, chase clatter, deepone splashes — runs per-client from synced positions.
 - killLightNear() (walldweller) reuses the lightdie event with fixture key.
 - Visual QA without GPU: ?showcase=<type> URL param spawns the species 6m ahead with flashlight on.
+- Progression reactivity: `monsters.director.level` / `.objectives` feed spawn odds (ai.js hostSpawnLogic); `escalate(n)` raises `tension` (spawn odds + decay); `alertArea(x,z,r)` sends nearby monsters to search a noise. `LEVEL_POOLS[6]` = the finale deck.
+- `monsters.ambientLine` is a `() => string` the horror scheduler calls ~28% of the time to surface a story fragment (`storyline`), wired via `wireAmbientStory()`.
+
+## Progression / story / ending (implemented)
+- `client/js/story.js` — PURE data: `STORY[level]` (title/intro/beats/epilogue/ambient), `ENDING` stages+tail, helpers `introFor/epilogueFor/beatsFor/beatFor/ambientFor/levelTitle/nextStoryLevel/isFinalLevel`, `LEVEL_ORDER=[0..6]`, `FINAL_LEVEL=6`.
+- `client/js/objectives.js` — PURE logic: `OBJECTIVE_PLANS` per level, `planFor/siteGoal/siteCells/siteCenter/siteKey/objectiveSites/exitCellFor`, `ObjectiveTracker` (activateSite -> beat index, update(dt) for `survive`, snapshot/apply for late joiners, hudLines/progress/isComplete).
+- `client/js/ending.js` — `EndingSequence` (self-contained outdoor set + camera dolly + `tickAnimation`/`tickEnvironment`); `ENV_PRESETS` normal/dawn/day/dusk/dread/crack/void.
+- Premise: the Backrooms are a RECORDING; the ARCHIVIST catalogs visitors by replaying their last recorded moments; objective "intake nodes" force a fragment out. Twist: after escaping to the surface, the REC light is still on — the players are the playback, not the arrivals.
+- World: `chunk.js buildObjectiveSite()` (black monolith pedestal + twin tape reels) and the exit gate (archive doorframe w/ cold light) are placed per `objectiveSites`/`exitCellFor`; chunks expose `interactables`; `WorldManager.nearestInteractable(px,pz,isUsed)`.
+- Flow: sites -> `objectives.isComplete()` -> `unlockExit()` -> `useExit()` -> host `advance` (or `ending` on FINAL_LEVEL) -> `levelTransition` (epilogue cinematic) -> `enterLevel`. Non-blocking.
+
+## HARD RULE — co-op/relay behaviour must be identical on every client
+- Every client runs the SAME code from the SHARED SEED. Spawning is HOST-ONLY (`hostSpawnLogic`); clients only receive snapshots/LOD. `monsters.update()` MUST be called identically on host and clients.
+- `objectiveSites(world, level)` and `exitCellFor(world, level)` MUST stay array-index deterministic — per-site `rngFrom(seed,...)` consumes the shared PRNG stream. NEVER call them in a different order on different clients (map/filter must preserve index order).
+- Do NOT centralise progression on the server: rooms.js only relays/replays events. Adding replay requires putting the kind in `WORLD_EVENTS` (obj/advance/ending/noclip are now included).
+- Story cinematics are NON-BLOCKING (`player.enabled` stays true) so co-op players can keep moving.
+- The finale is per-client (each player watches their own ending); `ending` is relayed so the party enters it together.

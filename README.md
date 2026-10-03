@@ -23,8 +23,8 @@ code, and up to 8 players can join from any device.
   stream in and unload automatically.
 - **Multiple levels** — Level 0 (yellow offices), Level 1 (industrial),
   Level 2 (mechanical dark), Level 3 (flooded), Level 4 (abandoned offices),
-  Level 5 (hotel), each with its own materials, lighting, fog, sounds, and
-  procedural rules.
+  Level 5 (hotel), and Level 6 (the ascent, the finale), each with its own
+  materials, lighting, fog, sounds, procedural rules and monster deck.
 - **Found-footage rendering** — Three.js WebGL with VHS post-processing
   (grain, scanlines, chromatic aberration, vignette, lens distortion, tracking
   wobble, occasional glitches), handheld camcorder motion with sway, inertia,
@@ -40,6 +40,19 @@ code, and up to 8 players can join from any device.
   synchronized across the room while some hallucinations are individual.
 - **Psychological horror events** — lights dying, doors appearing, corridors
   changing, distant figures, impossible geometry, objects moving.
+- **Level progression & objectives** — every level has a small set of co-op
+  objectives (activating hidden **intake nodes**) that unlock a sealed exit.
+  The exit does not teleport you: the whole party advances together into the
+  next chapter only once the objectives are done.
+- **A story worth finding** — the Backrooms are revealed to be a *recording*,
+  catalogued by an entity called the Archivist. Each node you touch forces it
+  to replay a fragment of the record. Clues arrive gradually through intros,
+  notes, whispers and environmental storytelling — never as an info dump.
+- **Cinematic ending** — after the final level, a staged finale carries the
+  party out of the Backrooms to an impossible surface world, lets them believe
+  they are safe, then turns: the REC light is still on, the sky has a seam, and
+  it becomes clear they were the playback all along. Leaves room for a next
+  chapter without feeling unfinished.
 - **Interaction** — doors, notes, keys, hidden mechanisms; exploration and
   survival, no weapons or combat.
 - **Emotes** — wave, point, laugh, sit, scared reaction, and dance; all
@@ -70,22 +83,35 @@ client/js/         Client modules
   menu.js          Menu / lobby / settings UI
   network.js       WebSocket client
   levels.js        Level definitions
+  story.js         Narrative spine (intros, beats, ending script)
+  objectives.js    Per-level objective plans + deterministic site placement
+  ending.js        Final cinematic sequence
   rng.js           Seeded PRNG
   notes.js         Note text content
 test/
-  multiplayer.test.js   Node-level WebSocket room/seed/monster tests
-  browser.test.js       Single-client headless Chromium smoke test
-  browser2p.test.js     Two-client headless Chromium multiplayer test
+  multiplayer.test.js         Node-level WebSocket room/seed/monster tests
+  worldgen.test.mjs           Deterministic worldgen + monster defs
+  monsters.test.mjs           Monster structure/anatomy assertions
+  objectives.test.mjs         Progression/story/ending pure-logic tests
+  browser.test.js             Single-client headless Chromium smoke test
+  browser2p.test.js           Two-client headless Chromium multiplayer test
+  browser-objectives.test.js  Full progression + finale flow (headless)
 ```
 
 ## Tests
 
 ```bash
-npm test            # server-level multiplayer tests (fast, no browser)
-npm run test:browser  # headless Chromium single-client UI test
-npm run test:2p       # headless Chromium two-client multiplayer test
-npm run test:all      # all of the above
+npm test                  # server-level multiplayer tests (fast, no browser)
+npm run test:world        # deterministic worldgen tests
+npm run test:objectives   # progression / story / ending logic tests
+npm run test:browser      # headless Chromium single-client UI test
+npm run test:2p           # headless Chromium two-client multiplayer test
+npm run test:all          # every test above, in order
 ```
+
+Note: the `jump` assertions in the browser tests are flaky under software
+WebGL (SwiftShader) and can fail on a clean checkout too — they are not
+progression regressions.
 
 Browser tests need a Chromium binary at `/usr/bin/chromium` (or set
 `CHROME_PATH`).

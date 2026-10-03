@@ -39,7 +39,7 @@ export class MenuUI {
     };
     E('btn-start').onclick = () => {
       const lv = parseInt(E('lobby-level').value, 10);
-      this.cb.start(lv < 0 ? (Math.random() * 6) | 0 : lv);
+      this.cb.start(lv < 0 ? (Math.random() * 7) | 0 : lv);
     };
     E('btn-leave-lobby').onclick = () => this.cb.leave();
     E('set-fullscreen').onclick = () => {

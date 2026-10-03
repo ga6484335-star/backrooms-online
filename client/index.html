@@ -115,6 +115,7 @@
         <option value="3">LEVEL 3 — THE FLOOD</option>
         <option value="4">LEVEL 4 — OFFICE</option>
         <option value="5">LEVEL 5 — HOTEL</option>
+        <option value="6">LEVEL 6 — THE ASCENT</option>
         <option value="-1">RANDOM</option>
       </select>
     </div>
@@ -142,6 +143,13 @@
     </div>
   </div>
   <div id="crosshair"></div>
+  <div id="objective-panel" class="hidden">
+    <div class="obj-head">
+      <div id="objective-progress" class="obj-ring">0%</div>
+      <div id="objective-title" class="obj-title">INTAKE</div>
+    </div>
+    <ul id="objective-list" class="obj-list"></ul>
+  </div>
   <div id="interact-prompt" class="hidden">[ E ] <span id="interact-text">OPEN</span></div>
   <div id="players-hud"></div>
   <div id="net-banner" class="hidden">RECONNECTING&#8230;</div>
@@ -208,6 +216,25 @@
       <button id="btn-leave-cancel" class="mbtn ghost">CANCEL</button>
       <button id="btn-leave-go" class="mbtn">LEAVE</button>
     </div>
+  </div>
+</div>
+
+<!-- ======================= STORY CINEMATIC ======================= -->
+<div id="cinematic-overlay" class="hidden">
+  <div class="cine-bars"></div>
+  <div id="cinematic-line" class="cine-line"></div>
+  <div id="cinematic-hint" class="cine-hint hidden">[ E ] CONTINUE</div>
+</div>
+
+<!-- ======================= ENDING ======================= -->
+<div id="ending-overlay" class="hidden">
+  <div class="cine-bars"></div>
+  <div id="ending-card" class="ending-card hidden"></div>
+  <div id="ending-tail" class="ending-tail hidden"></div>
+  <div id="ending-prompt" class="ending-prompt hidden">
+    <div class="ending-title">CHAPTER ONE — COMPLETE</div>
+    <div class="ending-sub">THE BACKROOMS WILL REMEMBER YOU.</div>
+    <button id="ending-continue" class="mbtn">RETURN</button>
   </div>
 </div>
 

@@ -20,7 +20,10 @@ import { MobileControls } from './mobile.js';
 import { MenuUI } from './menu.js';
 import { Flashlight } from './flashlight.js';
 import { noteText } from './notes.js';
-import { getLevel, nextLevelFrom } from './levels.js';
+import { getLevel } from './levels.js';
+import { ObjectiveTracker, objectiveSites, exitCellFor } from './objectives.js';
+import { introFor, epilogueFor, beatFor, ambientFor, nextStoryLevel, isFinalLevel, levelTitle } from './story.js';
+import { EndingSequence } from './ending.js';
 import { rngFrom, hashStr } from './rng.js';
 
 // ---------------------------------------------------------------------------
@@ -54,6 +57,12 @@ let dead = false;           // local player death state
 let respawnT = 0;           // seconds until respawn allowed
 let spectateIdx = 0;
 let distTravelled = 0;      // metres walked this session (horror director)
+
+// ---- progression / story state (co-op; authoritative-ish, relayed) --------
+let objectives = null;      // ObjectiveTracker for the current level
+let exitUnlocked = false;   // gate opened (all objectives done)
+let ending = null;          // EndingSequence while the finale plays
+let cinematic = null;       // {lines, i, t, glyph, onDone} typewriter overlay
 
 // ---------------------------------------------------------------------------
 // reconnection state
@@ -232,6 +241,34 @@ net.on('ev', (m) => {
       break;
     }
     case 'noclip': levelTransition(m.data.level); break;
+    case 'advance': {
+      // a peer/host finished the level — the whole party moves on together
+      if (m.data && m.data.to !== undefined && world && m.data.to !== world.level) {
+        levelTransition(m.data.to);
+      }
+      break;
+    }
+    case 'obj': {
+      // a peer activated an objective site (or completed the hold)
+      if (!objectives || !m.data) break;
+      if (m.data.kind === 'site' && m.data.key) {
+        const idx = objectives.activateSite(m.data.key);
+        if (idx >= 0) {
+          const site = { key: m.data.key, x: player.pos.x, z: player.pos.z };
+          // rebuild site coords from the key so audio is positional
+          const parts = String(m.data.key).split(':')[1];
+          if (parts) { const [cx, cz] = parts.split(',').map(Number); site.x = (cx + 0.5) * CELL; site.z = (cz + 0.5) * CELL; }
+          onSiteActivated(site, idx, true);
+        }
+      } else if (m.data.kind === 'hold' && objectives.isComplete()) {
+        unlockExit();
+      }
+      break;
+    }
+    case 'ending': {
+      if (!ending) startEnding();
+      break;
+    }
     case 'caught': {
       // someone was caught — if it was us, death flow runs locally via onCaught
       if (m.data.pid === -1 || m.data.pid === net.id) {
@@ -352,6 +389,11 @@ function applyWorldReplay(m) {
     doorToggles.set(k, v);
     if (worldMgr) worldMgr.setDoorOpen(k, v);
   }
+  // The room's `level` already reflects the latest chapter, so a replayed
+  // advance chain is collapsed to its FINAL target — re-walking every level
+  // would thrash chunk streaming (and play an intro per chapter) on join.
+  let replayLevel = null;
+  let sawEnding = false;
   for (const ev of m.events || []) {
     if (!ev || !ev.kind) continue;
     if (ev.kind === 'door' && ev.data) {
@@ -363,8 +405,30 @@ function applyWorldReplay(m) {
       lightMgr.killFixture(ev.data.key);
     } else if ((ev.kind === 'keypickup' || ev.kind === 'battpickup') && worldMgr && ev.data) {
       worldMgr.removeInteractable(ev.data.id);
+    } else if (ev.kind === 'advance' && ev.data) {
+      replayLevel = ev.data.to !== undefined ? ev.data.to : ev.data.level;
+    } else if (ev.kind === 'noclip' && ev.data) {
+      replayLevel = ev.data.level;
+    } else if (ev.kind === 'ending') {
+      sawEnding = true;
     }
   }
+  if (replayLevel !== null && world && replayLevel !== world.level && gameState === 'playing') {
+    enterLevel(replayLevel);
+    // objective events were for an earlier chapter; rebuild the tracker from
+    // the current level's plan (a late joiner cannot be mid-level anyway)
+    objectives = new ObjectiveTracker(replayLevel);
+    exitUnlocked = false;
+    updateObjectiveHud();
+  }
+  // objective activations belong to the *current* level — apply them last
+  for (const ev of m.events || []) {
+    if (!ev || ev.kind !== 'obj' || !ev.data || !objectives) continue;
+    if (ev.data.kind === 'site' && ev.data.key) objectives.activateSite(ev.data.key);
+    else if (ev.data.kind === 'hold') objectives.holdT = 99999;
+  }
+  if (objectives && objectives.isComplete()) unlockExit();
+  if (sawEnding && gameState === 'playing' && !ending) startEnding();
   if (m.monsters && monsters && !isHost) {
     monsters.applySnapshot(Object.values(m.monsters));
   }
@@ -389,6 +453,11 @@ function startGame(seed, level) {
   world = new WorldModel(seed, level);
   worldMgr = new WorldManager(scene, world, settings.quality);
   lightMgr = new LightManager(scene, settings.quality);
+  // progression + story for this level
+  objectives = new ObjectiveTracker(level);
+  exitUnlocked = false;
+  ending = null;
+  cinematic = null;
   monsters = new MonsterSystem(scene, world, worldMgr, audio, net, () => isHost);
   monsters.getLightAt = (x, z) => lightMgr.brightnessAt(x, z);
   events = new HorrorEvents(world, worldMgr, audio, engine, net);
@@ -399,6 +468,8 @@ function startGame(seed, level) {
   scares.onMessage = flashText;
   events.setLightMgr(lightMgr);
   events.onMessage = flashText;
+  // the room occasionally speaks a story fragment instead of a generic scare
+  wireAmbientStory();
 
   // flashlight
   if (flash) flash.dispose(scene);
@@ -463,7 +534,19 @@ function startGame(seed, level) {
   E('game-ui').classList.remove('hidden');
   E('cc-level').textContent = levelDef.name.split('—')[0].trim();
   E('cc-room').textContent = net.room ? `ROOM ${net.room.code}` : '';
+  E('objective-title').textContent = levelTitle(level);
   updatePlayersHud();
+  updateObjectiveHud();
+  // the director weighs objective progress + level depth
+  monsters.director.level = level;
+  monsters.getPlayers = () => {
+    const out = [{ id: net.id, x: player.pos.x, z: player.pos.z, yaw: player.yaw }];
+    for (const [id, rp] of remotePlayers.players) out.push({ id, x: rp.cur.x, z: rp.cur.z, yaw: rp.cur.yaw || 0 });
+    return out;
+  };
+
+  // cinematic story intro for this level (once per level start)
+  showCinematic(introFor(level), 3, null);
 
   if (player.mobile) {
     if (!mobile) {
@@ -530,11 +613,22 @@ function respawn() {
 
 function levelTransition(level) {
   if (!world) return;
+  // epilogue cinematic for the level we are leaving, then settle in
+  showCinematic(epilogueFor(world.level), 2.6, () => enterLevel(level));
+}
+
+// actually swap the world to a new level (called after the epilogue, or on a
+// relayed peer 'advance'/'noclip'). Rebuilds surroundings and progression.
+function enterLevel(level) {
+  if (!world) return;
   world.setLevel(level);
   // rebuild surroundings — door state and keys belong to the old level
   for (const key of [...worldMgr.chunks.keys()]) worldMgr.unload(key);
   doorToggles = new Map();
   keyInventory = new Set();
+  objectives = new ObjectiveTracker(level);
+  exitUnlocked = false;
+  monsters.director.level = level;
   const levelDef = getLevel(level);
   scene.fog = new THREE.FogExp2(levelDef.palette.fog, levelDef.palette.fogDensity);
   scene.background = new THREE.Color(levelDef.palette.fog);
@@ -543,9 +637,16 @@ function levelTransition(level) {
   audio.stopAmbience();
   audio.startAmbience(levelDef);
   E('cc-level').textContent = levelDef.name.split('—')[0].trim();
-  flashText(levelDef.name);
+  E('objective-title').textContent = levelTitle(level);
   engine.bumpGlitch(2);
   player.resetState(); // new level = fresh, safe posture
+  // spawn on the new level's spawn and stream its surroundings immediately
+  const [sx, sz] = world.spawnPoint(0);
+  player.teleport(sx, sz);
+  worldMgr.ensure(player.pos.x, player.pos.z);
+  updateObjectiveHud();
+  showCinematic(introFor(level), 3, null);
+  flashText(levelDef.name);
 }
 
 // ---------------------------------------------------------------------------
@@ -554,7 +655,10 @@ let currentInteract = null;
 
 function findInteractable() {
   if (!worldMgr) return null;
-  const it = worldMgr.nearestInteractable(player.pos.x, player.pos.z);
+  const it = worldMgr.nearestInteractable(
+    player.pos.x, player.pos.z,
+    (key) => (objectives && objectives.activated.has(key)) || (key.startsWith('exit:') && !exitUnlocked),
+  );
   return it;
 }
 
@@ -572,6 +676,10 @@ function doInteract() {
   if (!it) return;
   if (it.type === 'note') {
     openNote(it.data);
+  } else if (it.type === 'site') {
+    activateSite(it.data);
+  } else if (it.type === 'exit') {
+    useExit(it.data);
   } else if (it.type === 'battery') {
     flash.addBattery();
     worldMgr.removeInteractable(it.data.id);
@@ -596,15 +704,87 @@ function doInteract() {
     worldMgr.setDoorOpen(key, open);
     net.sendEvent('door', { key, open });
     if (open) audio.doorCreak(d.x, d.z); else audio.doorSlam(d.x, d.z);
-    // is this a noclip door? (special room door)
+    // a noclip door is an illegal shortcut: the Archivist rewinds you instead
+    // of letting you skip the level. It now punishes level-skipping.
     const cell = world.cellAt(d.cx, d.cz);
     const sp = cell.special;
     if (sp && sp.type === 'noclipdoor' && isHost) {
       const rng = rngFrom(hashStr(world.seed, `noclip:${d.cx},${d.cz}`));
-      const dest = nextLevelFrom(rng, world.level);
-      net.sendEvent('noclip', { level: dest });
-      levelTransition(dest);
+      const dest = (rng() < 0.5 ? 2 : 3); // shuffle between the machine decks
+      if (dest !== world.level) {
+        net.sendEvent('noclip', { level: dest });
+        levelTransition(dest);
+      }
     }
+  }
+}
+
+// ---- objective sites: force the Archivist to replay a story fragment --------
+// The room's own voice: a rotating pool of story fragments per level. Reads
+// world.level at call time so it tracks level changes automatically.
+let _ambIdx = 0, _ambLevel = -1;
+function wireAmbientStory() {
+  if (!events) return;
+  // HorrorEvents owns the rare-ambience scheduler; give it the level's lines.
+  events.ambientLine = () => {
+    if (!world) return null;
+    const lv = world.level;
+    if (lv !== _ambLevel) { _ambLevel = lv; _ambIdx = 0; }
+    const pool = ambientFor(lv, _ambIdx);
+    if (!pool.length) return null;
+    return pool[_ambIdx++ % pool.length];
+  };
+}
+
+function activateSite(site) {
+  if (!objectives || !world) return;
+  const beatIdx = objectives.activateSite(site.key);
+  if (beatIdx < 0) return;         // already known
+  net.sendEvent('obj', { kind: 'site', key: site.key, index: beatIdx, level: world.level });
+  onSiteActivated(site, beatIdx, false);
+}
+
+// shared client-side reaction (also used when a PEER activates a site)
+function onSiteActivated(site, beatIdx, remote) {
+  updateObjectiveHud();
+  flashText(remote ? 'A NODE WENT QUIET' : 'INTAKE NODE ACTIVATED');
+  audio.keyPick();
+  audio.buzz(site.x, site.z, 0.8);
+  engine.bumpGlitch(1.0);
+  // reading a node is loud — the Backrooms comes to listen
+  audio.distantMetal(0.9);
+  if (monsters) {
+    monsters.alertArea(site.x, site.z, 34);
+    monsters.escalate(1);
+  }
+  if (!remote) showCinematic([beatFor(world.level, beatIdx)], 2, null);
+  // if this completed every objective, open the way
+  if (objectives.isComplete()) unlockExit();
+}
+
+function unlockExit() {
+  if (exitUnlocked) return;
+  exitUnlocked = true;
+  E('objective-title').textContent = 'EXIT UNLOCKED';
+  flashText('THE WAY DOWN IS OPEN');
+  audio.doorSlam(player.pos.x + 4, player.pos.z);
+  engine.bumpGlitch(1.4);
+  audio.heartbeat(1);
+  if (monsters) monsters.escalate(2);
+}
+
+// ---- exit gate: advance the whole party together ----------------------------
+function useExit(it) {
+  if (!exitUnlocked) { flashText('SEALED — OBJECTIVES REMAIN'); audio.doorLocked(it.x, it.z); return; }
+  if (!isHost) { flashText('WAITING FOR THE PARTY'); return; }
+  if (isFinalLevel(world.level)) {
+    net.sendEvent('ending', { level: world.level });
+    startEnding();
+  } else {
+    const dest = nextStoryLevel(world.level);
+    if (dest === null) return;
+    net.sendEvent('advance', { from: world.level, to: dest });
+    levelTransition(dest);
   }
 }
 
@@ -689,6 +869,10 @@ function togglePause(force) {
   }
 }
 
+// ending return button (also skipped by E/Space/Enter while the prompt is up)
+const _endBtn = E('ending-continue');
+if (_endBtn) _endBtn.addEventListener('click', () => endEnding());
+
 let lastHudMenuToggle = 0;
 E('btn-hud-menu').addEventListener('click', () => {
   // hybrid/touch devices can fire click twice (tap + synthesized mouse click)
@@ -704,7 +888,20 @@ E('emote-bar').addEventListener('click', (ev) => {
 });
 
 window.addEventListener('keydown', (e) => {
+  // during the finale, Enter/E/Space returns to the menu once it has finished
+  if (gameState === 'ending') {
+    if (!ending || ending.done) {
+      if (e.code === 'Enter' || e.code === 'KeyE' || e.code === 'Space' || e.code === 'Escape') {
+        e.preventDefault(); endEnding();
+      }
+    }
+    return;
+  }
   if (gameState !== 'playing') return;
+  // a running story cinematic swallows input; E/Space/Enter skips it
+  if (cinematic && (e.code === 'KeyE' || e.code === 'Space' || e.code === 'Enter')) {
+    e.preventDefault(); skipCinematic(); return;
+  }
   if (paused) {
     if (e.code === 'Escape') togglePause(false);
     return;
@@ -742,6 +939,143 @@ function flashText(t) {
   el.classList.remove('hidden');
   clearTimeout(flashTimer);
   flashTimer = setTimeout(() => el.classList.add('hidden'), 4000);
+}
+
+// ---- objective HUD ---------------------------------------------------------
+function updateObjectiveHud() {
+  const panel = E('objective-panel');
+  const list = E('objective-list');
+  if (!panel || !list || !objectives) return;
+  panel.classList.remove('hidden');
+  list.innerHTML = '';
+  for (const line of objectives.hudLines()) {
+    const li = document.createElement('li');
+    li.className = 'obj-line' + (line.done ? ' done' : '');
+    li.innerHTML = `<span class="obj-label">${escapeHtmlMini(line.label)}</span>`
+      + `<span class="obj-val">${escapeHtmlMini(line.value)}</span>`;
+    list.appendChild(li);
+  }
+  const ring = E('objective-progress');
+  if (ring) {
+    const pct = Math.round(objectives.progress() * 100);
+    ring.style.background = `conic-gradient(var(--obj-accent) ${pct}%, rgba(255,255,255,0.08) ${pct}%)`;
+    ring.textContent = `${pct}%`;
+  }
+  if (exitUnlocked) E('objective-title').textContent = 'EXIT UNLOCKED';
+  else E('objective-title').textContent = levelTitle(world ? world.level : 0);
+}
+function escapeHtmlMini(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// ---- cinematic typewriter overlay ------------------------------------------
+// Shows `lines` one at a time typed out; after the last line + a beat, calls
+// `onDone`. Gameplay continues underneath (menus/HUD stay interactive after).
+function showCinematic(lines, pace = 3, onDone = null) {
+  if (!lines || !lines.length) { if (onDone) onDone(); return; }
+  cinematic = {
+    lines: lines.slice(), i: 0, t: 0, typed: 0,
+    cps: 34, minT: 1.6 + pace, onDone,
+  };
+  const ov = E('cinematic-overlay');
+  if (ov) ov.classList.remove('hidden');
+  E('cinematic-line').textContent = '';
+  E('cinematic-hint').classList.add('hidden');
+  // NOTE: deliberately non-blocking — in co-op you must keep moving even while
+  // the story narrates. The overlay is atmospheric, not a cutscene prison.
+}
+
+function updateCinematic(dt) {
+  if (!cinematic) return;
+  const c = cinematic;
+  const full = c.lines[c.i] || '';
+  c.t += dt;
+  c.typed = Math.min(full.length, c.typed + dt * c.cps);
+  E('cinematic-line').textContent = full.slice(0, c.typed | 0);
+  const shown = (c.typed | 0) >= full.length;
+  if (shown) E('cinematic-hint').classList.remove('hidden');
+  if (shown && c.t > c.minT) {
+    c.i++;
+    c.t = 0; c.typed = 0;
+    if (c.i >= c.lines.length) {
+      const cb = c.onDone;
+      cinematic = null;
+      E('cinematic-overlay').classList.add('hidden');
+      if (!dead && gameState === 'playing' && !paused && !ending) player.enabled = true;
+      if (cb) cb();
+    } else {
+      E('cinematic-line').textContent = '';
+      E('cinematic-hint').classList.add('hidden');
+    }
+  }
+}
+
+function skipCinematic() {
+  if (!cinematic) return;
+  const cb = cinematic.onDone;
+  cinematic = null;
+  E('cinematic-overlay').classList.add('hidden');
+  if (!dead && gameState === 'playing' && !paused && !ending) player.enabled = true;
+  if (cb) cb();
+}
+
+// ---- the ending ------------------------------------------------------------
+function startEnding() {
+  if (ending) return;
+  gameState = 'ending';
+  paused = false;
+  player.enabled = false;
+  player.dead = false;
+  dead = false;
+  E('game-ui').classList.add('hidden');
+  E('objective-panel').classList.add('hidden');
+  E('cinematic-overlay').classList.add('hidden');
+  E('death-overlay').classList.add('hidden');
+  E('pause-overlay').classList.add('hidden');
+  if (mobile) mobile.hide();
+  if (flash && flash.on) flash.setOn(false);
+  audio.stopAmbience();
+  E('ending-overlay').classList.remove('hidden');
+  E('ending-tail').classList.add('hidden');
+  E('ending-tail').innerHTML = '';
+  ending = new EndingSequence(scene, camera, player, engine, audio, {
+    onCard(card, st) { showEndingCard(card, st); },
+    onTail(lines) {
+      const el = E('ending-tail');
+      el.innerHTML = lines.map((l) => `<div>${escapeHtmlMini(l)}</div>`).join('');
+      el.classList.remove('hidden');
+    },
+    onDone() { finishEnding(); },
+  });
+  // fade the found-footage overlay back in
+  const fade = E('fade');
+  fade.style.transition = 'opacity 1.2s ease';
+  fade.classList.remove('clear');
+  setTimeout(() => { fade.style.transition = 'opacity 2.4s ease'; fade.classList.add('clear'); }, 1400);
+}
+
+function showEndingCard(card, st) {
+  const el = E('ending-card');
+  el.textContent = card;
+  el.classList.remove('hidden');
+  el.classList.remove('pop');
+  void el.offsetWidth;
+  el.classList.add('pop');
+  if (st && st.glitch) engine.bumpGlitch(st.glitch);
+}
+
+function finishEnding() {
+  E('ending-prompt').classList.remove('hidden');
+}
+
+function endEnding() {
+  if (ending) { ending.dispose(); ending = null; }
+  E('ending-overlay').classList.add('hidden');
+  E('ending-prompt').classList.add('hidden');
+  E('ending-card').classList.add('hidden');
+  E('ending-tail').classList.add('hidden');
+  gameState = 'playing';
+  leaveToMenu();
 }
 
 function formatTime(ms) {
@@ -879,6 +1213,7 @@ function monsterDiagLogger(dt) {
 // main loop
 let last = performance.now();
 let sendAcc = 0;
+let objHudAcc = 0;
 let fpsFrames = 0, fpsTime = 0, fpsValue = 60, lowFpsT = 0, autoDropped = false;
 
 function loop() {
@@ -905,7 +1240,17 @@ function loop() {
     } else lowFpsT = Math.max(0, lowFpsT - dt * 2);
   }
 
+  // the finale owns the camera and the scene — run it and stop here
+  if (gameState === 'ending') {
+    if (ending) { ending.tickAnimation(dt); ending.update(dt); }
+    engine.render(dt, now / 1000);
+    return;
+  }
+
   if (gameState !== 'playing' || !world) return;
+
+  // story cinematics advance regardless of pause/death (they gate gameplay)
+  if (cinematic) updateCinematic(dt);
 
   if (!dead) {
     // horror director telemetry: distance travelled, time, party size
@@ -918,6 +1263,8 @@ function loop() {
       monsters.director.distance = distTravelled;
       monsters.director.timePlayed = (now - startTime) / 1000;
       monsters.director.players = net.players.size;
+      monsters.director.objects = objectives ? objectives.activated.size : 0;
+      monsters.director.objectives = objectives ? objectives.progress() : 0;
     }
     if (events) events.director.distance = distTravelled;
   } else {
@@ -943,6 +1290,23 @@ function loop() {
   debugUpdate(dt);
   monsterDiagLogger(dt);
   morphLogic(dt);
+
+  // progression: tick survive-style objectives, refresh HUD, unlock when done
+  if (objectives) {
+    const before = objectives.isComplete();
+    objectives.update(dt);
+    const nowDone = objectives.isComplete();
+    objHudAcc += dt;
+    if (objHudAcc > 0.5) {
+      objHudAcc = 0;
+      if (gameState === 'playing' && !ending) updateObjectiveHud();
+    }
+    if (!before && nowDone) {
+      // the survive objective just finished — the party can leave
+      if (isHost) net.sendEvent('obj', { kind: 'hold', level: world.level });
+      unlockExit();
+    }
+  }
 
   screamCooldown = Math.max(0, screamCooldown - dt);
   // host streams monsters at 8Hz
@@ -970,6 +1334,8 @@ function loop() {
       currentInteract.type === 'note' ? 'READ NOTE'
       : currentInteract.type === 'battery' ? 'TAKE BATTERY'
       : currentInteract.type === 'key' ? 'TAKE RUSTY KEY'
+      : currentInteract.type === 'site' ? 'ACTIVATE INTAKE NODE'
+      : currentInteract.type === 'exit' ? (exitUnlocked ? 'ENTER THE EXIT' : 'SEALED — OBJECTIVES REMAIN')
       : doorPromptText(currentInteract.data);
   } else {
     prompt.classList.add('hidden');
@@ -1027,7 +1393,14 @@ function leaveToMenu() {
   E('death-overlay').classList.add('hidden');
   E('settings-panel').classList.add('hidden');
   E('note-overlay').classList.add('hidden');
+  E('objective-panel').classList.add('hidden');
+  E('cinematic-overlay').classList.add('hidden');
+  E('ending-overlay').classList.add('hidden');
   noteOverlayOpen = false;
+  cinematic = null;
+  objectives = null;
+  exitUnlocked = false;
+  if (ending) { ending.dispose(); ending = null; }
   audio.stopAmbience();
   if (worldMgr) {
     for (const key of [...worldMgr.chunks.keys()]) worldMgr.unload(key);
@@ -1053,6 +1426,39 @@ window.__dbg = {
   pos: () => [player.pos.x, player.pos.y, player.pos.z],
   player,
   state: () => ({ gameState, dead, paused, sitting: player.sitting, grounded: player.grounded, yOff: player.yOff }),
+  level: () => (world ? world.level : -1),
+  objectives: () => (objectives ? {
+    activated: [...objectives.activated],
+    complete: objectives.isComplete(),
+    progress: objectives.progress(),
+    holdT: objectives.holdT,
+  } : null),
+  exitUnlocked: () => exitUnlocked,
+  sites: () => (world ? objectiveSites(world, world.level).map((s) => ({ key: s.key, x: (s.cx + 0.5) * 4, z: (s.cz + 0.5) * 4, index: s.index })) : []),
+  exitPos: () => {
+    if (!world) return null;
+    const [cx, cz] = exitCellFor(world, world.level);
+    return { cx, cz, x: (cx + 0.5) * 4, z: (cz + 0.5) * 4 };
+  },
+  cinematicActive: () => !!cinematic,
+  skipCinematic: () => skipCinematic(),
+  endingActive: () => !!ending,
+  // test helper: walk the whole objective chain without moving the player
+  completeObjectives: () => {
+    if (!objectives) return false;
+    const sites = objectiveSites(world, world.level);
+    for (const s of sites) {
+      if (objectives.activated.has(s.key)) continue;
+      const idx = objectives.activateSite(s.key);
+      onSiteActivated({ key: s.key, x: (s.cx + 0.5) * 4, z: (s.cz + 0.5) * 4 }, idx, false);
+    }
+    // satisfy any survive objective
+    for (const o of objectives.plan) if (o.kind === 'survive') objectives.holdT = (o.seconds || 0) + 1;
+    if (objectives.isComplete()) unlockExit();
+    return objectives.isComplete();
+  },
+  startEnding: () => startEnding(),
+  endEnding: () => endEnding(),
   flash: () => (flash ? { on: flash.on, battery: flash.battery } : null),
   monsters: () => (monsters ? monsters.monsters.size : 0),
   monsterTypes: () => (monsters ? [...monsters.monsters.values()].map((m) => `${m.type}:${m.state}`) : []),

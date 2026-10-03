@@ -135,6 +135,32 @@ export const LEVELS = [
       { name: 'service',   w: 0.14, ceilAdd: -0.6, narrow: 0.3, propBoost: 1.8, tint: 0.85, lightStyle: 'tube' },
     ],
   },
+  {
+    // final story level — the control deck where the read head lives. Dark,
+    // high, red-lit, thick with cable trays and relays. Projector light bleeds
+    // through the ceiling in bands.
+    id: 6, name: 'LEVEL 6 — THE ASCENT',
+    wallProb: 0.48, doorProb: 0.45, pillarProb: 0.04, openHall: 0.14,
+    baseCeil: 4.4, ceilJitter: 1.2,
+    floorMat: 'metal', wallMat: 'metal', ceilMat: 'metal',
+    palette: {
+      floor: [54, 50, 54], wall: [70, 60, 64], ceil: [46, 44, 50],
+      fog: 0x050306, fogDensity: 0.085, ambient: 0x180d12, ambientI: 0.38,
+      lightColor: 0xff4a44, lightI: 9, lightDist: 10,
+    },
+    lightSpacing: 3, lightChance: 0.42,
+    props: ['cabletray', 'wires', 'valve', 'monitorstack', 'crate', 'pipe'],
+    hum: 150, ambience: 'mechanical',
+    specialBias: 1.3,
+    projector: true,
+    districts: [
+      { name: 'core',      w: 0.26 },
+      { name: 'relay',     w: 0.2,  propBoost: 2.4, pillarShape: 1, lightKeep: 0.8 },
+      { name: 'blackdeck', w: 0.2,  lightKeep: 0.12, damage: 0.5, tint: 0.55 },
+      { name: 'gantry',    w: 0.18, ceilAdd: 2.2, pillarProb: 0.28, propBoost: 0.6, lightBonus: 0.1 },
+      { name: 'spool',     w: 0.16, ceilAdd: -0.5, narrow: 0.4, propBoost: 1.8, lightStyle: 'bulb', tint: 0.8 },
+    ],
+  },
 ];
 
 export function getLevel(i) {

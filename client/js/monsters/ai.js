@@ -28,6 +28,10 @@ const LEVEL_POOLS = [
     'flicker', 'statue', 'drifter', 'rememberer', 'king', 'theunstoppable'],
   ['watcher', 'tallone', 'stalker', 'mimic', 'hunter', 'siren', 'runner', 'falseplayer', 'ceiling', 'bonefiend',
     'drifter', 'statue', 'swarm', 'drummer', 'null', 'thresher', 'rememberer', 'theunstoppable'],
+  // Level 6 — the control deck. Every "reader" species; the Archivist throws
+  // its favorite records at anyone trying to leave.
+  ['flicker', 'flicker', 'rememberer', 'rememberer', 'falseplayer', 'hunter', 'runner', 'bonefiend', 'thresher',
+    'king', 'swarm', 'drummer', 'null', 'statue', 'ceiling', 'walldweller', 'theunstoppable', 'theunstoppable'],
 ];
 // hard caps so the world never fills with monsters
 const CAPS = { watcher: 1, stalker: 1, hunter: 1, ambusher: 2, mimic: 2, runner: 1, crawler: 2, siren: 1,
@@ -64,9 +68,11 @@ export class MonsterSystem {
     this.dwellT = 0;
 
     // horror director inputs, fed from the main loop
-    this.director = { distance: 0, timePlayed: 0, deaths: 0, players: 1 };
+    this.director = { distance: 0, timePlayed: 0, deaths: 0, players: 1, level: 0, objectives: 0 };
     this.encounters = 0;      // total monsters spawned (guarantee+escalation)
     this.encounterAgo = 0;    // seconds since the last spawn
+    this.tension = 0;         // spikes from objective/exit events (progression)
+    this._tensionDecay = 0.05;
 
     this.hallucTimer = 50 + Math.random() * 60;
     this._visWarnings = new Set(); // warn-once per mesh class
@@ -110,7 +116,14 @@ export class MonsterSystem {
           // distance-based escalation: the deeper you travel, the hungrier it gets
           const dist = this.director.distance;
           const depthBonus = dist < 120 ? -0.25 : dist < 400 ? 0 : Math.min(0.2, (dist - 400) / 2000);
-          let chanceOf = 0.35 + darkness * 0.2 + noise + dwell + crowd + depthBonus - active.length * 0.25;
+          // progression reactivity: the world gets hungrier as the level deepens,
+          // as objectives are read, and for a while after an escalated event.
+          const levelBonus = Math.min(0.18, (this.world.level || 0) * 0.028);
+          const objProgress = this.director.objectives || 0;
+          const objBonus = objProgress * 0.12;
+          const tension = Math.min(0.3, (this.tension || 0) * 0.06);
+          let chanceOf = 0.35 + darkness * 0.2 + noise + dwell + crowd + depthBonus
+            + levelBonus + objBonus + tension - active.length * 0.25;
           // guaranteed encounters: past ~100m the director WILL bring the
           // first one; afterwards the chance creeps up the longer it's quiet
           let guaranteed = false;
@@ -348,6 +361,7 @@ export class MonsterSystem {
   // ------------------------------------------------------------- update
   update(dt, player, remotePlayers) {
     this.time += dt;
+    this.updateTension(dt);
     const ppos = [player.pos.x, player.pos.y, player.pos.z];
 
     // unified player list for detection (local + remote) — yaw needed so
@@ -594,6 +608,44 @@ export class MonsterSystem {
       return true;
     }
     return false;
+  }
+
+  // ---- progression reactivity -------------------------------------------
+  // A loud world event (an intake node reading, the exit opening) does two
+  // things: it raises ambient tension for a while, and nearby monsters drop
+  // what they are doing and converge on the noise. Co-op makes this a shared
+  // risk — reading a node is powerful but draws the room to you.
+  escalate(amount = 1, decay = 0.05) {
+    this.tension = Math.min(6, (this.tension || 0) + amount);
+    this._tensionDecay = decay;
+  }
+
+  updateTension(dt) {
+    if (this.tension > 0) {
+      this.tension = Math.max(0, this.tension - dt * (this._tensionDecay || 0.05));
+    }
+  }
+
+  // send every nearby monster toward (x,z) without a specific quarry. They
+  // sweep the area, hunting for whoever was foolish enough to make the noise.
+  alertArea(x, z, radius = 30) {
+    const r2 = radius * radius;
+    for (const m of this.monsters.values()) {
+      if (m.scare || m.private || !m.def) continue;
+      const d2 = (m.x - x) * (m.x - x) + (m.z - z) * (m.z - z);
+      if (d2 > r2) continue;
+      m.lastSeen = [x, z];
+      m.searchSpot = [x, z];
+      m.searchT = 9;
+      if (m.def.lethal) {
+        m.state = 'search';
+        m.stateT = 0;
+        m.bonusSpeed = (m.def.speed || 1) * 0.4;
+      } else if (m.def.moveWhenUnseen || m.def.retreatWhenSeen) {
+        m.state = 'watch';
+      }
+      this.audio.monsterVoice(m.type, m.x, 1.5, m.z, 0.7);
+    }
   }
 
   // ---- THE SCREAM: every creature in the room hears a human scream, no
