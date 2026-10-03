@@ -114,6 +114,7 @@ async function main() {
   chrome.kill();
   if (failures) { console.log(`\n${failures} FAILURES`); process.exit(1); }
   console.log('\nPAGES BOOT TEST PASSED \u2714');
+  process.exit(0);
 }
 
 main().catch((e) => { console.error('TEST EXCEPTION:', e.message); process.exit(1); });
