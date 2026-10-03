@@ -680,11 +680,12 @@ function startGame(seed, level, opts = {}) {
     fade.style.transition = 'opacity 3.5s ease';
     fade.classList.add('clear');
   }
-  // safety net: however we got here, the world is built and playable, so the
-  // found-footage overlay must never stay black. If a sequence failed to hand
-  // back, this lifts the fade so the player is never stuck on a black screen.
+  // safety net: however we got here, once control has actually returned to the
+  // player the found-footage overlay must never stay black. Gated on
+  // gameState==='playing' so it cannot cut a cold open / level transition /
+  // finale short — it only rescues a genuinely stuck post-start frame.
   setTimeout(() => {
-    if (world && !dead && !paused) E('fade').classList.add('clear');
+    if (world && gameState === 'playing' && !dead && !paused) E('fade').classList.add('clear');
   }, 6000);
   audio.distantMetal(0.4);
 }
