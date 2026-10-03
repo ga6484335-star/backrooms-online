@@ -23,7 +23,7 @@ import { noteText } from './notes.js';
 import { getLevel } from './levels.js';
 import { materialsFor } from './materials.js';
 import { ObjectiveTracker, objectiveSites, exitCellFor, loreCacheFor, cacheHintFor, hazardFor, hazardCells, hazardPhase, hazardDps, lootKindFor, puzzleSites, puzzleGoal, puzzleFor } from './objectives.js';
-import { introFor, epilogueFor, beatFor, ambientFor, radioFor, nextStoryLevel, isFinalLevel, levelTitle } from './story.js';
+import { introFor, epilogueFor, beatFor, ambientFor, radioFor, nextStoryLevel, isFinalLevel, levelTitle, ENDING } from './story.js';
 import { EndingSequence } from './ending.js';
 import { OpeningSequence } from './opening.js';
 import { TransitionSequence } from './transitions.js';
@@ -2161,6 +2161,10 @@ window.__dbg = {
   openState: () => (opening ? { phase: opening.phaseIdx, key: opening.phases[opening.phaseIdx].key, shot: opening.phases[opening.phaseIdx].shot, t: opening.t, line: opening.lineIdx, card: opening.phases[opening.phaseIdx].card } : null),
   _tickOpen: (n, dt) => { for (let i = 0; i < n && opening && !opening.done; i++) opening.update(dt); },
   _tickTransition: (n, dt) => { for (let i = 0; i < n && transition && !transition.done; i++) transition.update(dt); },
+  _tickEnding: (n, dt) => { for (let i = 0; i < n && ending && !ending.done; i++) { ending.tickAnimation(dt); ending.update(dt); } },
+  endingTime: () => (ending ? ending.t : -1),
+  endingStage: () => (ending ? (ENDING.stages[ending.stageIdx] || {}).key || null : null),
+  endingOverlayVisible: () => !!(ending && ending._overlay && ending._overlay.visible),
   monsters: () => (monsters ? monsters.monsters.size : 0),
   monsterTypes: () => (monsters ? [...monsters.monsters.values()].map((m) => `${m.type}:${m.state}`) : []),
   monsterIds: () => (monsters ? [...monsters.monsters.keys()] : []),

@@ -297,6 +297,24 @@ async function main() {
     const card = await cdp.eval(`document.getElementById('ending-card').textContent`);
     check(card && card.length > 0, `ending card renders: "${String(card).slice(0, 40)}"`);
 
+    // drive the whole film by hand (rAF is throttled headless) and assert the
+    // twist beats land in order — the ending is the payoff, so verify it runs
+    await cdp.eval(`window.__dbg._tickEnding(50, 0.5)`); // +25s -> the others/horizon
+    const stageMid = await cdp.eval(`window.__dbg.endingStage()`);
+    check(stageMid && ['grass', 'others', 'horizon'].includes(stageMid), `reached the calm beats (${stageMid})`);
+    await cdp.eval(`window.__dbg._tickEnding(40, 0.5)`); // +20s -> the twist
+    const stageTwist = await cdp.eval(`window.__dbg.endingStage()`);
+    check(['rec', 'mirror', 'reveal'].includes(stageTwist), `reached the twist beats (${stageTwist})`);
+    await cdp.eval(`window.__dbg._tickEnding(40, 0.5)`); // +20s -> the replay
+    const stageEnd = await cdp.eval(`window.__dbg.endingStage()`);
+    check(stageEnd === 'replay' || stageEnd === 'end', `reached the replay/end (${stageEnd})`);
+    // the camcorder overlay returns for the replay: the players are the recording
+    check((await cdp.eval(`window.__dbg.endingOverlayVisible()`)) === true,
+      'the camcorder overlay returns at the replay');
+    await cdp.eval(`window.__dbg._tickEnding(8, 0.5)`); // clear the tail delay
+    const tailShown = await cdp.eval(`!document.getElementById('ending-tail').classList.contains('hidden')`);
+    check(tailShown === true, 'ending tail (SIGNAL RETAINED…) is shown');
+
     // fast-forward: end directly and make sure we return cleanly
     await cdp.eval(`window.__dbg.endEnding()`);
     await sleep(800);

@@ -1098,4 +1098,83 @@ export class AudioEngine {
       o.start(t); o.stop(t + 0.1);
     }
   }
+
+  // ---- ending ambience -----------------------------------------------------
+  // A wind-and-hum bed for the impossible surface world. `warm` crossfades from
+  // the Backrooms hum toward a bright, open air — so the reveal is audible: the
+  // noise of the "outside" rises while the wrong hum refuses to leave.
+  startEndingAmbience() {
+    if (!this.ensure()) return;
+    this.stopEndingAmbience();
+    const ctx = this.ctx;
+    const wind = ctx.createGain(); wind.gain.value = 0.02;
+    const src = ctx.createBufferSource(); src.buffer = this._noiseBuf; src.loop = true;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 700; lp.Q.value = 0.3;
+    const lfo = ctx.createOscillator(); lfo.frequency.value = 0.06;
+    const lfoG = ctx.createGain(); lfoG.gain.value = 0.012;
+    lfo.connect(lfoG).connect(wind.gain);
+    src.connect(lp).connect(wind).connect(this.master);
+    // a stubborn Backrooms/read-head hum underneath everything
+    const hum = ctx.createGain(); hum.gain.value = 0.010;
+    const h1 = ctx.createOscillator(); h1.type = 'sine'; h1.frequency.value = 100;
+    h1.connect(hum).connect(this.master);
+    src.start(); lfo.start(); h1.start();
+    this._endNodes = [src, lfo, h1];
+    this._endGains = [wind, hum];
+    this._endWarm = 0;
+  }
+
+  // drive the crossfade from the ending's stage time (called each tick).
+  // Range [-1, 1]: positive = open, sunlit air; negative = closed and wrong,
+  // the Backrooms hum swelling over near-silent wind.
+  setEndingWarm(warm) {
+    if (!this._endGains || !this._endGains.length) return;
+    warm = Math.max(-1, Math.min(1, warm));
+    if (Math.abs(warm - this._endWarm) < 0.01) return;
+    this._endWarm = warm;
+    const w = Math.max(0, warm);
+    const c = Math.max(0, -warm);
+    try {
+      this._endGains[0].gain.value = 0.02 + w * 0.09 - c * 0.018;
+      this._endGains[1].gain.value = 0.010 * (1 - w * 0.7) + c * 0.028;
+    } catch (e) { /* context torn down */ }
+  }
+
+  stopEndingAmbience() {
+    for (const n of (this._endNodes || [])) { try { n.stop(); } catch (e) {} }
+    for (const g of (this._endGains || [])) { try { g.disconnect(); } catch (e) {} }
+    this._endNodes = []; this._endGains = []; this._endWarm = 0;
+  }
+
+  // the reveal: the "birds" and the wind loop out of phase, and a tape-gate
+  // stutter eats the ambience like a reel slipping. A digetic tell that the
+  // world is a loop, not a place.
+  tapeGlitch(dur = 1.1) {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const s = ctx.createBufferSource(); s.buffer = this._noiseBuf; s.loop = true;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(900, t); bp.Q.value = 2.4;
+    bp.frequency.linearRampToValueAtTime(240, t + dur);
+    const g = ctx.createGain();
+    // hard square gating = a reel skipping on the capstan
+    g.gain.setValueAtTime(0.0001, t);
+    const steps = 9;
+    for (let i = 0; i < steps; i++) {
+      const at = t + (dur / steps) * i;
+      g.gain.setValueAtTime(i % 3 === 0 ? 0.0001 : 0.14, at);
+    }
+    g.gain.linearRampToValueAtTime(0.0001, t + dur);
+    s.connect(bp).connect(g).connect(this.master);
+    s.start(t); s.stop(t + dur + 0.05);
+    // a rising servo whine under the stutter
+    const o = ctx.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(120, t);
+    o.frequency.exponentialRampToValueAtTime(600, t + dur * 0.6);
+    o.frequency.exponentialRampToValueAtTime(90, t + dur);
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900;
+    const og = ctx.createGain(); this._env(og, t, 0.02, dur, 0.06);
+    o.connect(lp).connect(og).connect(this.master);
+    o.start(t); o.stop(t + dur + 0.05);
+  }
 }
