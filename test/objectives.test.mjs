@@ -8,6 +8,7 @@ import {
   CACHE_PLANS, cachePlanFor, cacheCellFor, anyCacheCellFor, cacheKey,
   loreCacheFor, loreFor, LORE, LORE_TRUTH, cacheHintFor, CACHE_HINTS,
   hazardFor, hazardCells, hazardPhase, hazardDps, lootKindFor, lootFor, HAZARDS,
+  PUZZLES, puzzleFor, puzzlePlanFor, puzzleGoal, puzzleCells, puzzleSites, puzzleKey,
 } from '../client/js/objectives.js';
 import {
   STORY, ENDING, LEVEL_ORDER, FINAL_LEVEL, storyFor, introFor, epilogueFor,
@@ -82,7 +83,17 @@ console.log('\nco-op objective tracker');
   check(t.activateSite(siteKeys[1]) === 1, 'second activation reveals beat 1');
   check(!t.isComplete(), 'still incomplete with 2/3 sites');
   t.activateSite(siteKeys[2]);
-  check(t.isComplete(), 'complete after all sites');
+  check(!t.isComplete(), 'sites alone do not complete the level — the lock still seals it');
+  check(t.puzzleGoalN() === puzzleGoal(0), 'puzzle goal matches the level plan');
+
+  // the lock is its own step: collect every key
+  const pzKeys = puzzleSites(new WorldModel(7, 0), 0).map((p) => p.key);
+  check(pzKeys.length === puzzleGoal(0), `level 0 lays out ${puzzleGoal(0)} lock keys`);
+  check(t.collectPuzzle(pzKeys[0]) === true, 'first puzzle key collects');
+  check(t.collectPuzzle(pzKeys[0]) === false, 're-collecting a puzzle key is a no-op');
+  for (const k of pzKeys.slice(1)) t.collectPuzzle(k);
+  check(t.puzzleDone(), 'puzzle lock complete after all keys');
+  check(t.isComplete(), 'complete after all sites + the lock');
 
   // snapshot/apply roundtrip (relayed to peers)
   const snap = t.snapshot();
@@ -97,22 +108,28 @@ console.log('\nco-op objective tracker');
 console.log('\nsurvive objective (level 6)');
 {
   const t = new ObjectiveTracker(FINAL_LEVEL);
-  const siteKeys = objectiveSites(new WorldModel(9, FINAL_LEVEL), FINAL_LEVEL).map((s) => s.key);
+  const w6 = new WorldModel(9, FINAL_LEVEL);
+  const siteKeys = objectiveSites(w6, FINAL_LEVEL).map((s) => s.key);
+  const pzKeys = puzzleSites(w6, FINAL_LEVEL).map((p) => p.key);
   // survive must NOT tick until every site objective is done
   t.update(10);
   check(t.holdT === 0, 'hold does not tick before sites are done');
   for (const k of siteKeys) t.activateSite(k);
   check(!t.isComplete(), 'level 6 still incomplete with sites done but hold not elapsed');
   for (let i = 0; i < 200; i++) t.update(0.5); // 100s > 75s requirement
-  check(t.isComplete(), 'level 6 complete once sites done + hold satisfied');
+  check(t.holdT >= 75, `hold accumulated (${t.holdT.toFixed(1)}s)`);
+  check(!t.isComplete(), 'hold alone still does not complete — the lock remains');
+  for (const k of pzKeys) t.collectPuzzle(k);
+  check(t.isComplete(), 'level 6 complete once sites + hold + lock are satisfied');
   const t2 = new ObjectiveTracker(FINAL_LEVEL);
   for (const k of siteKeys) t2.activateSite(k);
   check(!t2.isComplete(), 'level 6 incomplete before the hold elapses');
   for (let i = 0; i < 200; i++) t2.update(0.5); // 100s > 75s requirement
   check(t2.holdT >= 75, `hold accumulated (${t2.holdT.toFixed(1)}s)`);
-  check(t2.isComplete(), 'level 6 complete after holding');
+  for (const k of pzKeys) t2.collectPuzzle(k);
+  check(t2.isComplete(), 'level 6 complete after holding + the lock');
   const lines = t2.hudLines();
-  check(lines.length === planFor(FINAL_LEVEL).length, 'HUD lines cover every objective');
+  check(lines.length === planFor(FINAL_LEVEL).length + 1, 'HUD lines cover every objective plus the lock');
 }
 
 // ---------------------------------------------------------------------------
@@ -292,5 +309,30 @@ console.log('\nhazard loot (risk / reward)');
   check(kinds.has('battery') && kinds.has('recorder'), 'loot pool includes both batteries and recorders');
   check(lootFor('nope') === lootFor('battery'), 'unknown loot falls back to battery');
 }
+
+// ---------------------------------------------------------------------------
+console.log('\npuzzle lock placement');
+for (const lv of LEVELS) {
+  const w = new WorldModel(2468, lv);
+  const a = puzzleCells(w, lv);
+  const b = puzzleCells(new WorldModel(2468, lv), lv);
+  check(JSON.stringify(a) === JSON.stringify(b), `level ${lv}: puzzle cells are deterministic`);
+  check(a.length === puzzleGoal(lv), `level ${lv}: lays out exactly ${puzzleGoal(lv)} lock keys`);
+  check(puzzlePlanFor(lv).label && typeof puzzlePlanFor(lv).label === 'string', `level ${lv}: lock is labelled`);
+  // never on top of an objective site or the exit (nothing to find there)
+  const reserved = new Set();
+  for (const s of objectiveSites(w, lv)) reserved.add(`${s.cx},${s.cz}`);
+  const [ecx, ecz] = exitCellFor(w, lv);
+  reserved.add(`${ecx},${ecz}`);
+  check(a.every(([cx, cz]) => !reserved.has(`${cx},${cz}`)), `level ${lv}: lock never collides with objectives/exit`);
+  check(a.every(([cx, cz]) => { const cell = w.cellAt(cx, cz); return !cell.special && !cell.water; }),
+    `level ${lv}: lock keys sit on ordinary, dry cells`);
+  // the resolver namespaces keys so an old chapter cannot satisfy this one
+  const t = new ObjectiveTracker(lv);
+  check(t.collectPuzzle('pz:999:0,0') === false, `level ${lv}: foreign puzzle key is rejected`);
+  check(t.collectPuzzle(a[0] ? puzzleKey(lv, a[0][0], a[0][1]) : `pz:${lv}:0,0`) === true, `level ${lv}: own key is accepted`);
+}
+check(puzzleFor(99) === PUZZLES[0], 'unknown level falls back to the level 0 lock');
+check(puzzleSites(new WorldModel(4, 3), 3).every((p) => p.x === (p.cx + 0.5) * 4), 'puzzle sites expose world coords');
 
 console.log(`\n${pass} passed, ${fail} failed`);

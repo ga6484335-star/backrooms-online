@@ -104,6 +104,19 @@ async function main() {
     assert(true, 'door/keypickup events sent without crash');
     console.log('  ✔ door/keypickup events accepted');
 
+    // puzzle keys are world events too: relayed live AND replayed to late joiners
+    const pzMark = b.msgs.length;
+    a.ws.send(JSON.stringify({ t: 'ev', kind: 'puzzle', data: { key: 'pz:0:3,-2', index: 0, level: 0 } }));
+    await sleep(300);
+    assert(b.msgs.slice(pzMark).some((m) => m.t === 'ev' && m.kind === 'puzzle' && m.data.key === 'pz:0:3,-2'),
+      'puzzle key event relayed');
+    const late = await connect('LATE');
+    late.ws.send(JSON.stringify({ t: 'join', code: a.room.code }));
+    await sleep(400);
+    const replayed = (late.room.events || []).some((m) => m.kind === 'puzzle' && m.data.key === 'pz:0:3,-2');
+    assert(replayed, 'puzzle key replayed to a late joiner');
+    late.ws.close();
+
     // 10. connection drop -> rejoin with session token
     assert(b.token, 'B received a session token');
     const bId = b.id;

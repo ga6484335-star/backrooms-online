@@ -8,7 +8,7 @@ import { GeoBuilder, PROP_BUILDERS } from '../props.js';
 import { hashStr, rngFrom, chance, range, intRange } from '../rng.js';
 import { getLevel } from '../levels.js';
 import { materialsFor } from '../materials.js';
-import { objectiveSites, exitCellFor, loreCacheFor, hazardFor, hazardCells, lootKindFor, lootFor } from '../objectives.js';
+import { objectiveSites, exitCellFor, loreCacheFor, hazardFor, hazardCells, lootKindFor, lootFor, puzzleSites } from '../objectives.js';
 
 // door leaf materials (cached per level): aged painted wood / metal handle
 const doorMatCache = new Map();
@@ -417,6 +417,19 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
         color: 0x9fd0ff, intensity: 9, distance: 9,
         flickerSeed: hashStr(seed, `objlight:${level}:${site.cx},${site.cz}`), special: null });
     }
+    // puzzle keys: a chain of small keyed pedestals that seal the exit. They are
+    // placed like objectives so every client finds the identical cells.
+    for (const pz of puzzleSites(world, level)) {
+      if (Math.floor(pz.cx / CELLS_PER_CHUNK) !== chunkX) continue;
+      if (Math.floor(pz.cz / CELLS_PER_CHUNK) !== chunkZ) continue;
+      buildPuzzleNode(gb, gbEmiss, pz, level);
+      colliders.push({ x: pz.x, z: pz.z, r: 0.42 });
+      interactables.push({ kind: 'puzzle', key: pz.key, index: pz.index, cx: pz.cx, cz: pz.cz,
+        x: pz.x, z: pz.z, label: pz.label });
+      lights.push({ cx: pz.cx, cz: pz.cz, x: pz.x, z: pz.z, y: 2.2,
+        color: 0xffcf7a, intensity: 6, distance: 7,
+        flickerSeed: hashStr(seed, `pzlight:${level}:${pz.cx},${pz.cz}`), special: null });
+    }
     const [ecx, ecz] = exitCellFor(world, level);
     if (Math.floor(ecx / CELLS_PER_CHUNK) === chunkX && Math.floor(ecz / CELLS_PER_CHUNK) === chunkZ) {
       const ex = (ecx + 0.5) * CELL, ez = (ecz + 0.5) * CELL;
@@ -467,6 +480,24 @@ function buildObjectiveSite(gb, gbEmiss, site, level) {
   // cue. Two nested boxes so it reads as volumemetric-ish through fog.
   gbEmiss.box(0.22, 5.4, 0.22, x, 2.1, z, [150, 205, 255]);
   gbEmiss.box(0.5, 0.16, 0.5, x, 4.75, z, [210, 235, 255]);
+}
+
+// A puzzle key: a squat breaker-style pedestal with a keyed socket and a warm
+// lamp. Deliberately lower and warmer than the cold objective beacons so the
+// two systems never read as the same thing — the nodes are waypoints, the keys
+// are locks. Once collected the mesh is hidden (main.js removes the
+// interactable), leaving the socket dark.
+function buildPuzzleNode(gb, gbEmiss, pz, level) {
+  const x = (pz.cx + 0.5) * CELL, z = (pz.cz + 0.5) * CELL;
+  const b = makeShiftBuilder(gb, x, z, (level % 3) * 0.4 - 0.4);
+  b.box(0.7, 0.5, 0.7, 0, 0.0, 0, [32, 30, 34]);        // squat plinth
+  b.box(0.52, 0.5, 0.52, 0, 0.5, 0, [24, 22, 26]);       // breaker body
+  b.box(0.6, 0.06, 0.6, 0, 1.03, 0, [56, 52, 58]);       // cap
+  // a keyed socket: a shallow hexagonal-ish well with a bright key blank
+  b.box(0.2, 0.16, 0.2, 0, 1.12, 0, [18, 16, 20]);
+  gbEmiss.box(0.1, 0.12, 0.1, x, 1.14, z, [210, 190, 130]); // warm key glow
+  // a small amber tab light on the body, matching the lamp pool
+  gbEmiss.box(0.1, 0.04, 0.05, x + 0.28, 0.72, z, [255, 190, 110]);
 }
 
 // The hidden cache: a small archive case — a dark cabinet with a single drawer

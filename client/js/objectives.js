@@ -385,6 +385,93 @@ export const LOOT = {
 
 export function lootFor(kind) { return LOOT[kind] || LOOT.battery; }
 
+// ---------------------------------------------------------------------------
+// PUZZLES — a deterministic "lock" that seals the exit on every level.
+//
+// Completing the objective sites is no longer enough on its own: the way down
+// is a sealed door that needs `steps` puzzle keys. Each key sits on an ordinary
+// cell laid out as a chain from near spawn outward, so the party has to sweep
+// the level (often against the signature hazard) rather than beeline for the
+// exit. This is deliberately simple and reliable — a keyed lock, not a riddle —
+// because it has to work identically for every client and for late joiners, and
+// it must never be possible to soft-lock the run.
+//
+// Everything is a pure function of (seed, level) using its OWN rng stream, so
+// the shared site/exit/cache/hazard streams are untouched. Positions are the
+// exact same integers on every client; "which keys are collected" is relayed
+// via the `puzzle` event.
+//
+// Every level is guaranteed solvable by construction: we only reject candidate
+// cells that collide with an objective site, the exit or a hazard cell (none of
+// which we would otherwise be missing a key for), and falling back to the exit
+// cell itself guarantees at least `want` cells exist.
+export const PUZZLES = {
+  0: { steps: 3, label: 'INTAKE SEALS' },
+  1: { steps: 3, label: 'PRESSURE VALVES' },
+  2: { steps: 3, label: 'CAPSTAN LOCKS' },
+  3: { steps: 4, label: 'PUMP BREAKERS' },
+  4: { steps: 4, label: 'ACCESS BADGES' },
+  5: { steps: 4, label: 'GUEST KEYS' },
+  6: { steps: 4, label: 'RELAY FUSES' },
+};
+
+export function puzzlePlanFor(level) { return PUZZLES[level] || PUZZLES[0]; }
+export function puzzleFor(level) { return puzzlePlanFor(level); }
+export function puzzleGoal(level) { return puzzlePlanFor(level).steps; }
+
+export function puzzleKey(level, cx, cz) { return `pz:${level}:${cx},${cz}`; }
+
+const _puzzleMemo = new Map();
+export function puzzleCells(world, level) {
+  const memoKey = `${world.seed >>> 0}:${level}`;
+  if (_puzzleMemo.has(memoKey)) return _puzzleMemo.get(memoKey);
+  const want = puzzleGoal(level);
+  const seed = world.seed >>> 0;
+  const rng = rngFrom(hashStr(seed, `pz:${level}`));
+
+  // Don't bury a key where a required objective already lives (nothing to find
+  // there), and never inside the exit cell. Hazard cells are avoided so the
+  // critical path is not forced through guaranteed damage, but are NOT required
+  // to be avoided for solvability.
+  const reserved = new Set();
+  for (const s of objectiveSites(world, level)) reserved.add(`${s.cx},${s.cz}`);
+  const [ecx, ecz] = exitCellFor(world, level);
+  reserved.add(`${ecx},${ecz}`);
+  for (const [cx, cz] of hazardCells(world, level)) reserved.add(`${cx},${cz}`);
+
+  const out = [];
+  const used = new Set();
+  for (let i = 0; i < want * 14 && out.length < want; i++) {
+    const ang = rng() * Math.PI * 2;
+    const rad = 5 + i * 1.6 + rng() * 7;
+    const cx = Math.round(Math.cos(ang) * rad);
+    const cz = Math.round(Math.sin(ang) * rad);
+    const key = `${cx},${cz}`;
+    if (used.has(key) || reserved.has(key)) continue;
+    const cell = world.cellAt(cx, cz);
+    if (cell.special || cell.water) continue;
+    used.add(key);
+    out.push([cx, cz]);
+  }
+  // guaranteed floor: the exit cell is always ordinary and reachable
+  let guard = 0;
+  while (out.length < want && guard++ < want) out.push([ecx, ecz]);
+  _puzzleMemo.set(memoKey, out);
+  return out;
+}
+
+export function puzzleSites(world, level) {
+  return puzzleCells(world, level).map(([cx, cz], i) => {
+    const [x, z] = siteCenter(cx, cz);
+    return {
+      key: puzzleKey(level, cx, cz),
+      index: i,
+      cx, cz, x, z,
+      label: puzzlePlanFor(level).label,
+    };
+  });
+}
+
 // Co-op objective tracker. Holds only serializable state so it can be snapshotted
 // into the `obj` event and replayed for late joiners / reconnects.
 export class ObjectiveTracker {
@@ -396,6 +483,7 @@ export class ObjectiveTracker {
     this.level = level | 0;
     this.plan = planFor(this.level);
     this.activated = new Set();   // site keys activated
+    this.puzzleKeys = new Set();  // puzzle keys collected
     this.holdT = 0;               // seconds held on a survive objective
     this.lastBeat = -1;           // index of last revealed story fragment
   }
@@ -406,6 +494,18 @@ export class ObjectiveTracker {
 
   siteCount() { return this.activated.size; }
   siteGoalN() { return this.countFor('site'); }
+
+  // ---- puzzle lock: a level-specific set of keys that seal the exit --------
+  puzzleCount() { return this.puzzleKeys.size; }
+  puzzleGoalN() { return puzzleGoal(this.level); }
+  puzzleDone() { return this.puzzleKeys.size >= this.puzzleGoalN(); }
+
+  collectPuzzle(key) {
+    if (typeof key === 'string' && key.startsWith('pz:') && !key.startsWith(`pz:${this.level}:`)) return false;
+    if (this.puzzleKeys.has(key)) return false;
+    this.puzzleKeys.add(key);
+    return true;
+  }
 
   objectiveDone(o) {
     if (o.kind === 'site') {
@@ -429,7 +529,7 @@ export class ObjectiveTracker {
   }
 
   isComplete() {
-    return this.plan.every((o) => this.objectiveDone(o));
+    return this.plan.every((o) => this.objectiveDone(o)) && this.puzzleDone();
   }
 
   // call each frame. `dt` seconds. The survive objective only ticks once every
@@ -457,16 +557,20 @@ export class ObjectiveTracker {
       total += sg;
       done += Math.min(sg, this.activated.size);
     }
+    // and the puzzle lock is its own slice of the ring
+    total += this.puzzleGoalN();
+    done += Math.min(this.puzzleGoalN(), this.puzzleKeys.size);
     return total > 0 ? Math.min(1, done / total) : 1;
   }
 
   snapshot() {
-    return { level: this.level, site: [...this.activated], t: +this.holdT.toFixed(2) };
+    return { level: this.level, site: [...this.activated], pz: [...this.puzzleKeys], t: +this.holdT.toFixed(2) };
   }
 
   apply(snap) {
     if (!snap) return;
     if (Array.isArray(snap.site)) for (const k of snap.site) this.activated.add(k);
+    if (Array.isArray(snap.pz)) for (const k of snap.pz) this.puzzleKeys.add(k);
     if (typeof snap.t === 'number' && snap.t > this.holdT) this.holdT = snap.t;
   }
 
@@ -480,6 +584,15 @@ export class ObjectiveTracker {
         const secs = Math.max(0, Math.ceil((o.seconds || 0) - this.holdT));
         lines.push({ label: o.label, value: this.objectiveDone(o) ? 'DONE' : `${secs}s`, done: this.objectiveDone(o) });
       }
+    }
+    // the lock always shows once the objectives themselves are satisfied
+    const sitesDone = this.plan.filter((o) => o.kind === 'site').every((o) => this.objectiveDone(o));
+    if (sitesDone || this.puzzleKeys.size > 0) {
+      lines.push({
+        label: puzzlePlanFor(this.level).label,
+        value: `${Math.min(this.puzzleGoalN(), this.puzzleKeys.size)}/${this.puzzleGoalN()}`,
+        done: this.puzzleDone(),
+      });
     }
     return lines;
   }

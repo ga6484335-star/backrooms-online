@@ -22,7 +22,7 @@ import { Flashlight } from './flashlight.js';
 import { noteText } from './notes.js';
 import { getLevel } from './levels.js';
 import { materialsFor } from './materials.js';
-import { ObjectiveTracker, objectiveSites, exitCellFor, loreCacheFor, cacheHintFor, hazardFor, hazardCells, hazardPhase, hazardDps, lootKindFor } from './objectives.js';
+import { ObjectiveTracker, objectiveSites, exitCellFor, loreCacheFor, cacheHintFor, hazardFor, hazardCells, hazardPhase, hazardDps, lootKindFor, puzzleSites, puzzleGoal, puzzleFor } from './objectives.js';
 import { introFor, epilogueFor, beatFor, ambientFor, radioFor, nextStoryLevel, isFinalLevel, levelTitle } from './story.js';
 import { EndingSequence } from './ending.js';
 import { OpeningSequence } from './opening.js';
@@ -298,6 +298,15 @@ net.on('ev', (m) => {
       }
       break;
     }
+    case 'puzzle': {
+      // a peer collected a puzzle key — remove it here too and re-check the lock
+      if (!objectives || !m.data || !m.data.key) break;
+      if (objectives.collectPuzzle(m.data.key)) {
+        if (worldMgr) worldMgr.removeInteractable(m.data.key);
+        onPuzzleCollected({}, true);
+      }
+      break;
+    }
     case 'ending': {
       if (!ending) startEnding();
       break;
@@ -488,6 +497,9 @@ function applyWorldReplay(m) {
     } else if (ev.kind === 'loot' && ev.data.id) {
       lootTakenKeys.add(ev.data.id);
       if (worldMgr) worldMgr.removeInteractable(ev.data.id);
+    } else if (ev.kind === 'puzzle' && ev.data.key && objectives) {
+      objectives.collectPuzzle(ev.data.key);
+      if (worldMgr) worldMgr.removeInteractable(ev.data.key);
     }
   }
   if (objectives && objectives.isComplete()) unlockExit();
@@ -856,6 +868,7 @@ function findInteractable() {
     (key) => (objectives && objectives.activated.has(key))
       || (key.startsWith('cache:') && cachesFound.has(key))
       || (key.startsWith('loot:') && lootTakenKeys.has(key))
+      || (key.startsWith('pz:') && objectives && objectives.puzzleKeys.has(key))
       || (key.startsWith('exit:') && !exitUnlocked),
   );
   return it;
@@ -880,6 +893,8 @@ function doInteract() {
     activateSite(it.data);
   } else if (it.type === 'cache') {
     openLoreCache(it.data);
+  } else if (it.type === 'puzzle') {
+    collectPuzzle(it.data);
   } else if (it.type === 'loot') {
     takeLoot(it.data);
   } else if (it.type === 'exit') {
@@ -978,6 +993,36 @@ function onSiteActivated(site, beatIdx, remote) {
     // tied to the story beat rather than to a random timer
     monsters.stageEncounter(null, site.x, site.z);
   }
+}
+
+// ---- puzzle lock: collect a deterministic key, relay it, open the seal ------
+function collectPuzzle(pz) {
+  if (!objectives || !world || !pz || !pz.key) return;
+  if (!objectives.collectPuzzle(pz.key)) return;
+  net.sendEvent('puzzle', { key: pz.key, index: pz.index, level: world.level });
+  if (worldMgr) worldMgr.removeInteractable(pz.key);
+  onPuzzleCollected(pz, false);
+}
+
+// shared reaction (also fired when a peer collects one)
+function onPuzzleCollected(pz, remote) {
+  updateObjectiveHud();
+  const t = puzzlePlanLabel();
+  if (objectives.puzzleDone()) {
+    flashText(remote ? 'THE PARTY HAS EVERY ' + t : t + ' ALIGNED');
+    unlockExit();
+  } else {
+    const n = objectives.puzzleCount(), goal = objectives.puzzleGoalN();
+    flashText(remote ? `A PEER TURNED A KEY (${n}/${goal})` : `${t.slice(0, -1) || 'KEY'} ${n}/${goal}`);
+  }
+  audio.keyPick();
+  if (pz && pz.x !== undefined) { audio.buzz(pz.x, pz.z, 0.6); engine.bumpGlitch(0.7); }
+  if (monsters && pz && pz.x !== undefined) monsters.alertArea(pz.x, pz.z, 22);
+}
+
+function puzzlePlanLabel() {
+  try { return puzzleFor(world ? world.level : 0).label || 'LOCKS'; }
+  catch (e) { return 'LOCKS'; }
 }
 
 // ---- level hazards: per-level signature threat mechanics -------------------
@@ -1438,6 +1483,12 @@ function updateObjectiveCompass(dt) {
     label = 'EXIT';
     const p = window.__dbg && window.__dbg.exitPos ? window.__dbg.exitPos() : null;
     if (p) target = p;
+  } else if (objectives.plan.every((o) => o.kind === 'survive' || objectives.objectiveDone(o))
+      && !objectives.puzzleDone()) {
+    // sites are done — the compass switches to the lock keys
+    label = 'LOCK';
+    const keys = puzzleSites(world, world.level).filter((p) => !objectives.puzzleKeys.has(p.key));
+    if (keys.length) target = { x: keys[0].x, z: keys[0].z };
   } else {
     const sites = objectiveSites(world, world.level);
     const next = sites.find((s) => !objectives.activated.has(s.key));
@@ -1874,6 +1925,7 @@ function loop() {
       : currentInteract.type === 'key' ? 'TAKE RUSTY KEY'
       : currentInteract.type === 'site' ? 'ACTIVATE INTAKE NODE'
       : currentInteract.type === 'cache' ? `OPEN ${(currentInteract.data.label || 'ARCHIVE').toUpperCase()}`
+      : currentInteract.type === 'puzzle' ? `TURN KEY — ${(currentInteract.data.label || 'LOCK').toUpperCase()}`
       : currentInteract.type === 'loot' ? `TAKE ${(currentInteract.data.label || 'PICKUP').toUpperCase()}`
       : currentInteract.type === 'exit' ? (exitUnlocked ? 'ENTER THE EXIT' : 'SEALED — OBJECTIVES REMAIN')
       : doorPromptText(currentInteract.data);
@@ -1990,7 +2042,12 @@ window.__dbg = {
     complete: objectives.isComplete(),
     progress: objectives.progress(),
     holdT: objectives.holdT,
+    puzzle: [...objectives.puzzleKeys],
+    puzzleGoal: objectives.puzzleGoalN(),
+    puzzleDone: objectives.puzzleDone(),
   } : null),
+  puzzlePos: () => (world ? puzzleSites(world, world.level).map((p) => ({ key: p.key, cx: p.cx, cz: p.cz, x: p.x, z: p.z, label: p.label, index: p.index })) : []),
+  puzzleGoal: () => (world ? puzzleGoal(world.level) : 0),
   exitUnlocked: () => exitUnlocked,
   sites: () => (world ? objectiveSites(world, world.level).map((s) => ({ key: s.key, x: (s.cx + 0.5) * 4, z: (s.cz + 0.5) * 4, index: s.index })) : []),
   exitPos: () => {
@@ -2066,8 +2123,17 @@ window.__dbg = {
     }
     // satisfy any survive objective
     for (const o of objectives.plan) if (o.kind === 'survive') objectives.holdT = (o.seconds || 0) + 1;
+    // and turn every lock key (test helper walks the whole chain)
+    for (const pz of puzzleSites(world, world.level)) objectives.collectPuzzle(pz.key);
     if (objectives.isComplete()) unlockExit();
     return objectives.isComplete();
+  },
+  completePuzzle: () => {
+    if (!objectives || !world) return false;
+    const pz = puzzleSites(world, world.level).find((p) => !objectives.puzzleKeys.has(p.key));
+    if (!pz) return objectives.puzzleDone();
+    collectPuzzle(pz); // exercises the real relay + remove path
+    return objectives.puzzleDone();
   },
   startEnding: () => startEnding(),
   endEnding: () => endEnding(),

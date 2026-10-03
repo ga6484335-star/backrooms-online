@@ -181,8 +181,33 @@ async function main() {
       await sleep(900);
       await cdp.eval(`window.__dbg.interact()`);
     }
+    check((await cdp.eval(`window.__dbg.exitUnlocked()`)) === false,
+      'exit stays sealed after the nodes — the lock remains');
+
+    // ---- the puzzle lock: deterministic keys that seal the exit
+    const pz = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.puzzlePos())`));
+    const pzGoal = await cdp.eval(`window.__dbg.puzzleGoal()`);
+    check(pz.length === pzGoal, `level lays out ${pzGoal} lock keys (${pz.length})`);
+    check(pz.every((p) => p.key.startsWith('pz:')), 'lock keys are namespaced');
+    check((await cdp.eval(`JSON.stringify(window.__dbg.objectives().puzzle)`)) === '[]', 'no keys collected yet');
+    // collect all but the last via the real interact path
+    for (let i = 0; i < pz.length - 1; i++) {
+      await cdp.eval(`window.__dbg.teleport(${pz[i].x}, ${pz[i].z})`);
+      await sleep(900);
+      const nearPz = await cdp.eval(`(() => { const it = window.__dbg.nearInteractable(); return it ? it.type : null; })()`);
+      check(nearPz === 'puzzle', `near lock key after teleport (${nearPz})`);
+      const actedPz = await cdp.eval(`window.__dbg.interact()`);
+      check(actedPz === 'puzzle', `interact turned the key (${actedPz})`);
+    }
+    check((await cdp.eval(`window.__dbg.exitUnlocked()`)) === false, 'exit still sealed with one key left');
+    const lastKey = pz[pz.length - 1];
+    await cdp.eval(`window.__dbg.teleport(${lastKey.x}, ${lastKey.z})`);
+    await sleep(900);
+    await cdp.eval(`window.__dbg.interact()`);
+    check(JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.objectives())`)).puzzleDone === true,
+      'puzzle lock reports complete');
     const unlocked = await cdp.eval(`window.__dbg.exitUnlocked()`);
-    check(unlocked === true, 'exit unlocks after all objectives');
+    check(unlocked === true, 'exit unlocks after objectives + the lock');
     check(JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.objectives())`)).complete === true,
       'objectives report complete');
 
