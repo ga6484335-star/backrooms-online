@@ -151,6 +151,11 @@
     <ul id="objective-list" class="obj-list"></ul>
   </div>
   <div id="interact-prompt" class="hidden">[ E ] <span id="interact-text">OPEN</span></div>
+  <div id="objective-compass" class="hidden">
+    <div id="oc-arrow">&#9650;</div>
+    <div id="oc-label">OBJECTIVE</div>
+    <div id="oc-dist">--m</div>
+  </div>
   <div id="players-hud"></div>
   <div id="net-banner" class="hidden">RECONNECTING&#8230;</div>
   <div id="event-text" class="hidden"></div>
@@ -217,6 +222,15 @@
       <button id="btn-leave-go" class="mbtn">LEAVE</button>
     </div>
   </div>
+</div>
+
+<!-- ======================= OPENING (COLD OPEN) ======================= -->
+<div id="opening-overlay" class="hidden">
+  <div class="cine-bars"></div>
+  <div id="opening-rec"><span class="opening-rec-dot"></span>REC</div>
+  <div id="opening-card" class="opening-card hidden"></div>
+  <div id="opening-line" class="cine-line"></div>
+  <div id="opening-hint" class="cine-hint hidden">[ E ] SKIP</div>
 </div>
 
 <!-- ======================= STORY CINEMATIC ======================= -->

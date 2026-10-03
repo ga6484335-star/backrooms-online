@@ -59,7 +59,7 @@ async function makeClient(port, name) {
   const cdp = new CDP(ws);
   await cdp.call('Runtime.enable');
   await cdp.call('Page.enable');
-  await cdp.call('Page.navigate', { url: `http://127.0.0.1:${PORT}/?v=${Date.now()}` });
+  await cdp.call('Page.navigate', { url: `http://127.0.0.1:${PORT}/?v=${Date.now()}&skipintro=1` });
   await sleep(4500);
   return cdp;
 }

@@ -787,4 +787,203 @@ export class AudioEngine {
     g.connect(p);
     s.start(t); s.stop(t + 0.9); o.start(t); o.stop(t + 0.9);
   }
+
+  // ===================== opening / transition sound design ==================
+  // A looping street bed for the cold open: soft wind, a distant substation
+  // hum, and rare far-off traffic. Not positional — it wraps the listener.
+  startStreetAmbience() {
+    if (!this.ensure()) return;
+    this.stopStreetAmbience();
+    const ctx = this.ctx;
+    // wind
+    const wind = ctx.createGain(); wind.gain.value = 0.03;
+    const src = ctx.createBufferSource(); src.buffer = this._noiseBuf; src.loop = true;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 420; lp.Q.value = 0.3;
+    const lfo = ctx.createOscillator(); lfo.frequency.value = 0.09;
+    const lfoG = ctx.createGain(); lfoG.gain.value = 0.012;
+    lfo.connect(lfoG).connect(wind.gain);
+    src.connect(lp).connect(wind).connect(this.master);
+    // distant mains hum (the wrongness creeps in later, but it is already here)
+    const hum = ctx.createGain(); hum.gain.value = 0.008;
+    const h1 = ctx.createOscillator(); h1.type = 'sine'; h1.frequency.value = 100;
+    h1.connect(hum).connect(this.master);
+    src.start(); lfo.start(); h1.start();
+    this._streetNodes = [src, lfo, h1];
+    this._streetGains = [wind, hum];
+    // sparse traffic
+    const traffic = () => {
+      this.passingCar();
+      this._streetTrafficTimer = setTimeout(traffic, 5000 + Math.random() * 9000);
+    };
+    this._streetTrafficTimer = setTimeout(traffic, 2500 + Math.random() * 3000);
+  }
+
+  stopStreetAmbience() {
+    for (const n of (this._streetNodes || [])) { try { n.stop(); } catch (e) {} }
+    for (const g of (this._streetGains || [])) { try { g.disconnect(); } catch (e) {} }
+    if (this._streetTrafficTimer) clearTimeout(this._streetTrafficTimer);
+    this._streetNodes = []; this._streetGains = []; this._streetTrafficTimer = null;
+  }
+
+  // a car passing on a wet street: filtered noise swept across the stereo field
+  passingCar() {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const p = this.panner((Math.random() < 0.5 ? -1 : 1) * 18, 1.0, 6, 4);
+    const src = ctx.createBufferSource(); src.buffer = this._noiseBuf; src.loop = true;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 0.6;
+    lp.frequency.setValueAtTime(280, t);
+    lp.frequency.linearRampToValueAtTime(900, t + 1.2);
+    lp.frequency.linearRampToValueAtTime(200, t + 2.6);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.06, t + 1.1);
+    g.gain.linearRampToValueAtTime(0.0001, t + 2.8);
+    src.connect(lp).connect(g).connect(p).connect(this.master);
+    src.start(t); src.stop(t + 2.9);
+  }
+
+  // concrete splitting: a brittle high crack over a low structural groan
+  concreteCrack() {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const s = ctx.createBufferSource(); s.buffer = this._noiseBuf;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass';
+    f.frequency.setValueAtTime(2600, t); f.Q.value = 1.4;
+    f.frequency.exponentialRampToValueAtTime(700, t + 0.35);
+    const g = ctx.createGain();
+    this._env(g, t, 0.001, 0.5, 0.5);
+    s.connect(f).connect(g).connect(this.master);
+    s.start(t, Math.random(), 0.7);
+    const o = ctx.createOscillator(); o.type = 'triangle';
+    o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(48, t + 0.9);
+    const og = ctx.createGain();
+    this._env(og, t, 0.005, 1.0, 0.32);
+    o.connect(og).connect(this.master);
+    o.start(t); o.stop(t + 1.1);
+  }
+
+  // the fall: a long filtered-noise whoosh that rises then pitches down
+  fallWhoosh(duration = 2.4) {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const src = ctx.createBufferSource(); src.buffer = this._noiseBuf; src.loop = true;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 0.9;
+    bp.frequency.setValueAtTime(1400, t);
+    bp.frequency.exponentialRampToValueAtTime(180, t + duration);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.28, t + 0.25);
+    g.gain.linearRampToValueAtTime(0.0001, t + duration);
+    src.connect(bp).connect(g).connect(this.master);
+    src.start(t); src.stop(t + duration + 0.1);
+  }
+
+  // sub-bass drop for the moment reality tears
+  subDrop(freq = 42, dur = 1.6) {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(freq * 3, t);
+    o.frequency.exponentialRampToValueAtTime(freq * 0.6, t + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.32, t + 0.06);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g).connect(this.master);
+    o.start(t); o.stop(t + dur + 0.05);
+  }
+
+  // body hitting a familiar floor
+  landing() {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const src = ctx.createBufferSource(); src.buffer = this._noiseBuf;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 260;
+    const g = ctx.createGain(); this._env(g, t, 0.002, 0.35, 0.4);
+    src.connect(lp).connect(g).connect(this.master);
+    src.start(t, Math.random(), 0.4);
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(90, t); o.frequency.exponentialRampToValueAtTime(40, t + 0.4);
+    const og = ctx.createGain(); this._env(og, t, 0.002, 0.45, 0.3);
+    o.connect(og).connect(this.master);
+    o.start(t); o.stop(t + 0.5);
+  }
+
+  // a bank of fluorescents igniting at once
+  fluorescentBurst() {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    for (let i = 0; i < 3; i++) {
+      const o = ctx.createOscillator(); o.type = 'square';
+      o.frequency.value = 120 * (1 + i * 0.03);
+      const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 800;
+      const g = ctx.createGain();
+      const tt = t + i * 0.05;
+      g.gain.setValueAtTime(0.0001, tt);
+      g.gain.linearRampToValueAtTime(0.03, tt + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, tt + 0.5);
+      o.connect(f).connect(g).connect(this.master);
+      o.start(tt); o.stop(tt + 0.55);
+    }
+  }
+
+  // a descending metal grind for machine/belt transitions
+  machineLurch(dur = 1.8) {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const s = ctx.createBufferSource(); s.buffer = this._noiseBuf; s.loop = true;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 3;
+    f.frequency.setValueAtTime(160, t);
+    f.frequency.linearRampToValueAtTime(90, t + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.18, t + 0.15);
+    g.gain.linearRampToValueAtTime(0.0001, t + dur);
+    s.connect(f).connect(g).connect(this.master);
+    s.start(t); s.stop(t + dur + 0.1);
+    for (let i = 0; i < 5; i++) {
+      const tt = t + i * 0.28;
+      const o = ctx.createOscillator(); o.type = 'square';
+      o.frequency.value = 70 + Math.random() * 40;
+      const f2 = ctx.createBiquadFilter(); f2.type = 'lowpass'; f2.frequency.value = 500;
+      const g2 = ctx.createGain(); this._env(g2, tt, 0.005, 0.2, 0.09);
+      o.connect(f2).connect(g2).connect(this.master);
+      o.start(tt); o.stop(tt + 0.25);
+    }
+  }
+
+  // water surging over the listener for the flood wake-up
+  waterSurge(dur = 2.2) {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const s = ctx.createBufferSource(); s.buffer = this._noiseBuf; s.loop = true;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 0.7;
+    lp.frequency.setValueAtTime(1200, t);
+    lp.frequency.linearRampToValueAtTime(300, t + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.22, t + 0.3);
+    g.gain.linearRampToValueAtTime(0.0001, t + dur);
+    s.connect(lp).connect(g).connect(this.master);
+    s.start(t); s.stop(t + dur + 0.1);
+    this.splash(0, 0, 1.4);
+  }
+
+  // elevator chime + doors, for the hotel transition
+  elevatorChime() {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    for (const [f, d] of [[784, 0], [523, 0.5]]) {
+      const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f;
+      const g = ctx.createGain();
+      const tt = t + d;
+      g.gain.setValueAtTime(0.0001, tt);
+      g.gain.linearRampToValueAtTime(0.12, tt + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, tt + 1.1);
+      o.connect(g).connect(this.master);
+      o.start(tt); o.stop(tt + 1.15);
+    }
+    this.doorCreak(0, 0);
+  }
 }

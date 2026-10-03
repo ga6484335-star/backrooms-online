@@ -366,6 +366,11 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
       colliders.push({ x: (site.cx + 0.5) * CELL, z: (site.cz + 0.5) * CELL, r: 0.5 });
       interactables.push({ kind: 'site', key: site.key, index: site.index, cx: site.cx, cz: site.cz,
         x: (site.cx + 0.5) * CELL, z: (site.cz + 0.5) * CELL });
+      // a cold pool of light under the node so it reads as active machinery and
+      // can be found in the dark without hunting wall to wall
+      lights.push({ cx: site.cx, cz: site.cz, x: (site.cx + 0.5) * CELL, z: (site.cz + 0.5) * CELL, y: 2.6,
+        color: 0x9fd0ff, intensity: 9, distance: 9,
+        flickerSeed: hashStr(seed, `objlight:${level}:${site.cx},${site.cz}`), special: null });
     }
     const [ecx, ecz] = exitCellFor(world, level);
     if (Math.floor(ecx / CELLS_PER_CHUNK) === chunkX && Math.floor(ecz / CELLS_PER_CHUNK) === chunkZ) {
@@ -386,18 +391,25 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
   return group;
 }
 
-// An "intake node": a black monolith pedestal with twin tape reels on top.
-// Reads as machinery the Backrooms left running.
+// An "intake node": a black monolith pedestal with twin tape reels on top,
+// crowned by a tall cold beacon so it can be spotted across a room and read as
+// a destination rather than a random prop. Reads as machinery the Backrooms
+// left running.
 function buildObjectiveSite(gb, gbEmiss, site, level) {
-  const b = makeShiftBuilder(gb, (site.cx + 0.5) * CELL, (site.cz + 0.5) * CELL, (level % 4) * 0.35 - 0.5);
+  const x = (site.cx + 0.5) * CELL, z = (site.cz + 0.5) * CELL;
+  const b = makeShiftBuilder(gb, x, z, (level % 4) * 0.35 - 0.5);
   b.box(0.9, 0.9, 0.9, 0, 0.0, 0, [34, 32, 36]);       // plinth
   b.box(0.7, 1.15, 0.7, 0, 0.9, 0, [26, 24, 28]);      // column
   b.box(0.78, 0.06, 0.78, 0, 2.05, 0, [58, 54, 60]);   // cap
   // two reels (flat cylinders) on the cap, read as tape spools
   b.cylinder(0.24, 0.09, -0.18, 2.12, 0, [150, 44, 40]);
   b.cylinder(0.24, 0.09, 0.18, 2.12, 0, [150, 44, 40]);
-  // slot of cold light
-  gbEmiss.box(0.5, 0.05, 0.08, (site.cx + 0.5) * CELL, 1.55, (site.cz + 0.5) * CELL, [180, 220, 255]);
+  // slot of cold light at the read-out
+  gbEmiss.box(0.5, 0.05, 0.08, x, 1.55, z, [180, 220, 255]);
+  // beacon: a tall, thin column of light rising out of the cap — the guidance
+  // cue. Two nested boxes so it reads as volumemetric-ish through fog.
+  gbEmiss.box(0.22, 5.4, 0.22, x, 2.1, z, [150, 205, 255]);
+  gbEmiss.box(0.5, 0.16, 0.5, x, 4.75, z, [210, 235, 255]);
 }
 
 // The exit: a standing archive doorframe with a cold bright mouth. Locked until

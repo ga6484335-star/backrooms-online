@@ -61,7 +61,7 @@ async function main() {
     '--headless=new', '--no-sandbox', '--disable-gpu-sandbox',
     '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-dev-shm-usage',
     `--remote-debugging-port=${CDP_PORT}`, '--window-size=1280,800', '--autoplay-policy=no-user-gesture-required',
-    `http://127.0.0.1:${PORT}/`,
+    `http://127.0.0.1:${PORT}/?skipintro=1`,
   ], { stdio: 'pipe' });
   chrome.stderr.on('data', () => {});
 
@@ -107,6 +107,32 @@ async function main() {
     // intro cinematic is showing (non-blocking), then clear it
     const cine = await cdp.eval(`window.__dbg.cinematicActive()`);
     check(cine === true, 'story intro cinematic plays on arrival');
+    await cdp.eval(`window.__dbg.skipCinematic()`);
+
+    // the cold open is a real, skippable state (exercised without running the
+    // full 68s film): force it on, confirm the overlay + phase, then skip out
+    await cdp.eval(`window.__dbg.startOpening()`);
+    check((await cdp.eval(`window.__dbg.openingActive()`)) === true, 'cold open starts');
+    check((await cdp.eval(`window.__dbg.state().gameState`)) === 'opening', 'cold open switches game state');
+    check((await cdp.eval(`!document.getElementById('opening-overlay').classList.contains('hidden')`)) === true,
+      'cold-open overlay visible');
+    check((await cdp.eval(`window.__dbg.openingPhase()`)) === 'street', 'cold open begins on the street');
+    await sleep(400);
+    await cdp.eval(`window.__dbg.skipOpening()`);
+    check((await cdp.eval(`window.__dbg.openingActive()`)) === false, 'cold open skips cleanly');
+    check((await cdp.eval(`window.__dbg.state().gameState`)) === 'playing', 'control returns after the cold open');
+    await cdp.eval(`window.__dbg.skipCinematic()`);
+
+    // level transitions are their own state (level 5 = the lift)
+    await cdp.eval(`window.__dbg.startTransition(5)`);
+    check((await cdp.eval(`window.__dbg.transitionKind()`)) === 'elevator', 'level 5 transition is the lift');
+    check((await cdp.eval(`window.__dbg.state().gameState`)) === 'transition', 'transition switches game state');
+    await cdp.eval(`window.__dbg.skipTransition()`);
+    check((await cdp.eval(`window.__dbg.state().gameState`)) === 'playing', 'control returns after the transition');
+    await cdp.eval(`window.__dbg.skipCinematic()`);
+
+    // the objective compass points at the next goal
+    check((await cdp.eval(`window.__dbg.compass()`)) !== null, 'objective compass queryable');
     await cdp.eval(`window.__dbg.skipCinematic()`);
 
     // walk to the first site and activate it via the real interact path

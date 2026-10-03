@@ -201,6 +201,164 @@ export const ENDING = {
   ],
 };
 
+// ---------------------------------------------------------------------------
+// OPENING — the cold open. The game does not begin in the Backrooms: it begins
+// in the ordinary world, seconds before it stops being ordinary.
+//
+// Each phase owns a slice of time and a handful of typed lines. `world` is the
+// environment the client renders (`opening.js`): street -> wrong -> crack ->
+// fall -> land -> wake. Dialogue is internal monologue + a scrap of radio
+// traffic, kept short so it plays like a cold open, not a cutscene.
+export const OPENING = {
+  id: 'cold-open',
+  phases: [
+    {
+      key: 'street', world: 'street', dur: 15,
+      sfx: ['streetAmb', 'steps'],
+      lines: [
+        '05:48 PM. THE SAME STREET HOME.',
+        'THE SAME LAMP. THE SAME CAR ON THE SAME CORNER.',
+        'LONG DAY. LIGHTS HALF BROKEN. JUST WANT THE DOOR.',
+      ],
+    },
+    {
+      key: 'wrong', world: 'wrong', dur: 11,
+      sfx: ['hum', 'stepsSlow'],
+      lines: [
+        '...THE STREETLIGHTS ARE A LITTLE TOO FAR APART.',
+        'THE CAR HASN\'T MOVED. YOU PICTURED IT THERE.',
+        'THE HUM FROM THE SUBSTATION IS COMING FROM THE SIDEWALK.',
+      ],
+    },
+    {
+      key: 'crack', world: 'crack', dur: 7,
+      sfx: ['crack', 'subDrop'],
+      lines: [
+        'YOU LOOK DOWN.',
+        'THE CONCRETE IS A PATTERN. THE PATTERN IS A DOORWAY.',
+        'THE FLOOR GIVES WAY.',
+      ],
+    },
+    {
+      key: 'fall', world: 'fall', dur: 14,
+      sfx: ['whoosh', 'subDrop2'],
+      lines: [
+        'YOU FALL THROUGH THE WORLD.',
+        'NOT DOWN — THROUGH. PAST THE WALLS OF THINGS THAT NEVER HAD ROOMS.',
+        'THE FALLING HAS A RHYTHM. THE RHYTHM IS BEING PLAYED BACK.',
+      ],
+    },
+    {
+      key: 'land', world: 'land', dur: 12,
+      sfx: ['land', 'hum', 'fluores'],
+      lines: [
+        'THE HUM.',
+        'YELLOW. DAMP CARPET. FLUORESCENT LIGHT THAT DOES NOT FLICKER.',
+        'YOU KNOW THIS PLACE. YOU HAVE NEVER BEEN HERE.',
+      ],
+    },
+    {
+      key: 'wake', world: 'wake', dur: 9,
+      sfx: ['hum'],
+      lines: [
+        'THE RED LIGHT IS STILL ON.',
+        'YOU ARE STILL RECORDING.',
+        'MOVE.',
+      ],
+    },
+  ],
+};
+
+// Total opening length (seconds), derived so the client never desyncs from the
+// script. The sequence ends the moment control returns.
+export const OPENING_DURATION = OPENING.phases.reduce((n, p) => n + p.dur, 0);
+
+// ---------------------------------------------------------------------------
+// PREROLL — how each level begins. Deliberately different per level so entering
+// a new chapter never feels like the same loading screen twice. `kind` selects
+// the client's transition module; `lines` are typed out underneath.
+export const PREROLL = {
+  0: {
+    kind: 'fall', title: 'INTAKE', card: 'YOU FALL INTO THE YELLOW.',
+    lines: [
+      'THE HUM.',
+      'YELLOW. DAMP CARPET. THE LIGHT DOES NOT FLICKER.',
+      'IT KNOWS YOU LANDED.',
+    ],
+  },
+  1: {
+    kind: 'door', title: 'THE HUM', card: 'A DOOR THAT WAS NOT THERE.',
+    lines: [
+      'A SERVICE DOOR, OPEN, WARM WITH THE SOUND OF MACHINES.',
+      'YOU STEP THROUGH BECAUSE NOTHING ELSE STEPPED THROUGH YOU.',
+      'IT CLOSES INTO SOLID WALL BEHIND YOU.',
+    ],
+  },
+  2: {
+    kind: 'lurch', title: 'THE LINE', card: 'THE FLOOR MOVES LIKE A MACHINE.',
+    lines: [
+      'THE GROUND SHUDDERS AND CARRIES YOU — A BELT, NOT A FLOOR.',
+      'PIPEWORKS WITHOUT PIPES. YOUR STOMACH DROPS A DECADE.',
+      'THE MACHINE HAS FED YOU INTO ITSELF.',
+    ],
+  },
+  3: {
+    kind: 'flood', title: 'THE FLOOD', card: 'YOU COME UP SOMEWHERE COLD.',
+    lines: [
+      'WATER. NOT RISING — REACHING.',
+      'YOU SURFACE IN A ROOM THAT HAS FORGOTTEN ITS FLOOR.',
+      'EVERY STEP HERE SWALLOWS SOMETHING THAT WAS YOU.',
+    ],
+  },
+  4: {
+    kind: 'wake', title: 'THE OPERATORS', card: 'YOU WAKE AT A DESK THAT IS NOT YOURS.',
+    lines: [
+      'A MONITOR. A MUG, STILL WARM. A CHAIR STILL SPINNING.',
+      'SOMEONE WAS SITTING HERE A SECOND BEFORE YOU EXISTED.',
+      'THE PAPERWORK IS RECENT. THE DUST IS NOT.',
+    ],
+  },
+  5: {
+    kind: 'elevator', title: 'THE GUESTS', card: 'THE LIFT OPENS ON A FLOOR THAT HAS NO NUMBER.',
+    lines: [
+      'AN ELEVATOR YOU DO NOT REMEMBER ENTERING.',
+      'IT OPENS ON CARPET THE COLOUR OF DRIED BLOOD.',
+      'THE ROOMS HERE ARE GUESTS. DO NOT KNOCK.',
+    ],
+  },
+  6: {
+    kind: 'ascent', title: 'THE ASCENT', card: 'SOMETHING PULLS YOU UP THROUGH THE CEILING.',
+    lines: [
+      'THE HUM IS LOUDEST HERE BECAUSE THE HEAD IS HERE.',
+      'ABOVE THIS CEILING IS AN EXIT. IT IS ON. IT IS PROJECTING.',
+      'IT IS READING YOU.',
+    ],
+  },
+};
+
+export function prerollFor(level) {
+  return PREROLL[level] || PREROLL[0];
+}
+
+// ---------------------------------------------------------------------------
+// RADIO — sparse fragments of other people's recordings, played through the
+// horror scheduler. Not lore dumps: half-heard traffic that implies someone was
+// here before you and is being replayed too.
+export const RADIO = {
+  0: ['…anyone on this channel… yellow…', '…do not trust the doors that open…', '…recording… still recording…'],
+  1: ['…flood the shafts, it hears the pumps…', '…the machines are not lifting anything…', '…we have been turning for forty days…'],
+  2: ['…capstan seven is eating the tapes…', '…do not let it dub you…', '…this is not pipework, this is a deck…'],
+  3: ['…the water is other people…', '…forget me, forget me, forget…', '…it drains and gives back less…'],
+  4: ['…intake date is today, onboarding is years ago…', '…we are the subjects now, keep filming…', '…it has started recording us…'],
+  5: ['…room forty is ours, do not knock…', '…the guests check out but never leave…', '…your room is here, your bed is here…'],
+  6: ['…believe the exit, that is the only way…', '…the read head wants a clean ending…', '…it believes we are true…'],
+};
+
+export function radioFor(level, n) {
+  const pool = RADIO[level] || RADIO[0];
+  return pool[n % pool.length];
+}
+
 export const LEVEL_ORDER = [0, 1, 2, 3, 4, 5, 6];
 export const FINAL_LEVEL = 6;
 

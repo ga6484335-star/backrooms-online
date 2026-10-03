@@ -71,7 +71,7 @@ async function main() {
     '--disable-dev-shm-usage',
     `--remote-debugging-port=${CDP_PORT}`, '--window-size=1280,800',
     '--autoplay-policy=no-user-gesture-required',
-    `http://127.0.0.1:${PORT}/`,
+    `http://127.0.0.1:${PORT}/?skipintro=1`,
   ], { stdio: 'pipe' });
   chrome.stderr.on('data', () => {});
 

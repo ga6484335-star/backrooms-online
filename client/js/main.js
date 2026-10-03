@@ -22,8 +22,10 @@ import { Flashlight } from './flashlight.js';
 import { noteText } from './notes.js';
 import { getLevel } from './levels.js';
 import { ObjectiveTracker, objectiveSites, exitCellFor } from './objectives.js';
-import { introFor, epilogueFor, beatFor, ambientFor, nextStoryLevel, isFinalLevel, levelTitle } from './story.js';
+import { introFor, epilogueFor, beatFor, ambientFor, radioFor, nextStoryLevel, isFinalLevel, levelTitle } from './story.js';
 import { EndingSequence } from './ending.js';
+import { OpeningSequence } from './opening.js';
+import { TransitionSequence } from './transitions.js';
 import { rngFrom, hashStr } from './rng.js';
 
 // ---------------------------------------------------------------------------
@@ -32,6 +34,9 @@ const canvas = document.getElementById('gl');
 const engine = new RendererEngine(canvas);
 const scene = engine.scene;
 const camera = engine.camera;
+// the camera is a scene node so camera-attached effects (transition sheets,
+// fall streaks, flashes) render — three.js ignores cameras as draw objects
+scene.add(camera);
 const audio = new AudioEngine();
 const net = new Network();
 
@@ -63,6 +68,13 @@ let objectives = null;      // ObjectiveTracker for the current level
 let exitUnlocked = false;   // gate opened (all objectives done)
 let ending = null;          // EndingSequence while the finale plays
 let cinematic = null;       // {lines, i, t, glyph, onDone} typewriter overlay
+let opening = null;         // OpeningSequence cold-open (before the Backrooms)
+let openingDone = false;    // cold-open has run (or was skipped) this session
+let transition = null;      // TransitionSequence entering a new level
+let objHudAcc = 0;          // objective HUD refresh accumulator
+let lastCompass = 0;        // objective compass refresh accumulator
+let ambientStoryIdx = 0;    // rotating ambient story pool index
+let radioIdx = 0;           // rotating radio line index
 
 // ---------------------------------------------------------------------------
 // reconnection state
@@ -176,8 +188,8 @@ net.on('room', (m) => {
   window.__seed = m.seed; // debug hook for tests
   if (m.rejoin && gameState === 'playing') { resumeFromRejoin(m); return; }
   if (m.state === 'playing') {
-    // joined (or page-refreshed) into a game already in progress
-    startGame(m.seed, m.level);
+    // joined (or page-refreshed) into a game already in progress — no cold open
+    startGame(m.seed, m.level, { midJoin: true });
     applyWorldReplay(m);
     return;
   }
@@ -445,7 +457,7 @@ setInterval(() => {
 
 // ---------------------------------------------------------------------------
 // game start
-function startGame(seed, level) {
+function startGame(seed, level, opts = {}) {
   gameState = 'playing';
   menu.hideAll();
 
@@ -545,26 +557,142 @@ function startGame(seed, level) {
     return out;
   };
 
-  // cinematic story intro for this level (once per level start)
-  showCinematic(introFor(level), 3, null);
-
-  if (player.mobile) {
-    if (!mobile) {
-      mobile = new MobileControls(player, doInteract, doEmote, togglePause);
-      mobile.onFlash = () => { if (!dead && flash) flash.toggle(); };
-      mobile.onScream = doScream;
-    }
-    mobile.show();
+  // ---- STORY MODE hand-off -------------------------------------------------
+  // A fresh session on Level 0 opens with the cold open (normal world → fall).
+  // Everything else opens with that level's own distinctive transition. Both
+  // are non-interactive but non-blocking: the world streams underneath and
+  // control returns when the sequence ends (or is skipped).
+  const skipIntro = new URLSearchParams(location.search).has('skipintro');
+  // a player joining a party already in progress should never be forced
+  // through the cold open — they drop straight into the level
+  const freshStart = (level === 0 && !openingDone && !opts.midJoin);
+  if (!skipIntro && freshStart) {
+    startOpening();
+  } else if (!skipIntro && !opts.midJoin) {
+    startTransition(level);
   } else {
-    canvas.requestPointerLock?.().catch?.(() => {});
+    openingDone = true;
+    player.enabled = true;
+    showCinematic(introFor(level), 3, null);
   }
 
-  // intro fade
+  // intro fade (a short black lift; the sequences own their own reveals)
   startTime = performance.now();
-  const fade = E('fade');
-  fade.style.transition = 'opacity 3.5s ease';
-  fade.classList.add('clear');
+  if (skipIntro) {
+    const fade = E('fade');
+    fade.style.transition = 'opacity 3.5s ease';
+    fade.classList.add('clear');
+  }
   audio.distantMetal(0.4);
+}
+
+// ---- story mode: the cold open --------------------------------------------
+function startOpening() {
+  gameState = 'opening';
+  player.enabled = false;
+  if (mobile) mobile.hide();
+  E('fade').classList.add('clear');
+  const ov = E('opening-overlay');
+  ov.classList.remove('hidden');
+  E('opening-hint').classList.add('hidden');
+  E('opening-card').classList.add('hidden');
+  E('opening-line').textContent = '';
+  opening = new OpeningSequence(scene, camera, player, engine, audio, {
+    onCard(card) {
+      const el = E('opening-card');
+      if (!card) { el.classList.add('hidden'); return; }
+      el.textContent = card;
+      el.classList.remove('hidden', 'pop');
+      void el.offsetWidth;
+      el.classList.add('pop');
+    },
+    onLine(t) { E('opening-line').textContent = t; },
+    onHint(show) { E('opening-hint').classList.toggle('hidden', !show); },
+    onDone() { finishOpening(); },
+  });
+}
+
+function finishOpening() {
+  if (!opening) return;
+  if (!opening.done) opening.done = true;
+  opening.dispose();
+  opening = null;
+  E('opening-overlay').classList.add('hidden');
+  E('opening-hint').classList.add('hidden');
+  E('opening-line').textContent = '';
+  E('opening-card').classList.add('hidden');
+  openingDone = true;
+  gameState = 'playing';
+  player.resetState();
+  const [sx, sz] = world.spawnPoint(0);
+  player.teleport(sx, sz);
+  worldMgr.ensure(player.pos.x, player.pos.z);
+  player.enabled = true;
+  if (player.mobile && mobile) mobile.show(); else canvas.requestPointerLock?.().catch?.(() => {});
+  // the room speaks the first beat, and a radio scrap comes through
+  setTimeout(() => { if (gameState === 'playing') showCinematic(introFor(0), 3, null); }, 900);
+  audio.distantMetal(0.5);
+  if (monsters) monsters.escalate(0.6); // the world notices you landed
+}
+
+function skipOpening() {
+  if (!opening) return;
+  finishOpening();
+}
+
+// ---- story mode: a level's own transition ---------------------------------
+function startTransition(level) {
+  gameState = 'transition';
+  player.enabled = false;
+  if (mobile) mobile.hide();
+  E('fade').classList.add('clear');
+  const ov = E('opening-overlay');
+  ov.classList.remove('hidden');
+  E('opening-rec').classList.add('hidden');
+  E('opening-hint').classList.add('hidden');
+  E('opening-line').textContent = '';
+  const cardEl = E('opening-card');
+  cardEl.classList.add('hidden');
+  transition = new TransitionSequence(scene, camera, player, engine, audio, level, {
+    onCard(card) {
+      if (!card) { cardEl.classList.add('hidden'); return; }
+      cardEl.textContent = card;
+      cardEl.classList.remove('hidden', 'pop');
+      void cardEl.offsetWidth;
+      cardEl.classList.add('pop');
+    },
+    onLine(t) { E('opening-line').textContent = t; },
+    onHint(show) { E('opening-hint').classList.toggle('hidden', !show); },
+    onDone() { finishTransition(level); },
+  });
+}
+
+function finishTransition(level) {
+  if (!transition) return;
+  if (!transition.done) transition.done = true;
+  transition.dispose();
+  transition = null;
+  const ov = E('opening-overlay');
+  ov.classList.add('hidden');
+  E('opening-rec').classList.remove('hidden');
+  E('opening-hint').classList.add('hidden');
+  E('opening-line').textContent = '';
+  E('opening-card').classList.add('hidden');
+  gameState = 'playing';
+  player.enabled = true;
+  if (player.mobile && mobile) mobile.show(); else canvas.requestPointerLock?.().catch?.(() => {});
+  showCinematic(introFor(level), 3, null);
+  if (monsters) {
+    monsters.escalate(1.0); // arrival is loud; the world reacts
+    // every level greets you with something once you are standing — a distant
+    // reveal, never a spawn in the view cone
+    if (isHost) monsters.stageEncounter(null, player.pos.x, player.pos.z);
+  }
+}
+
+function skipTransition() {
+  if (!transition) return;
+  finishTransition(transition.level);
 }
 
 function localDeath() {
@@ -645,7 +773,8 @@ function enterLevel(level) {
   player.teleport(sx, sz);
   worldMgr.ensure(player.pos.x, player.pos.z);
   updateObjectiveHud();
-  showCinematic(introFor(level), 3, null);
+  // each level begins its own way — a door, a lurch, a flood, a lift…
+  startTransition(level);
   flashText(levelDef.name);
 }
 
@@ -720,8 +849,8 @@ function doInteract() {
 }
 
 // ---- objective sites: force the Archivist to replay a story fragment --------
-// The room's own voice: a rotating pool of story fragments per level. Reads
-// world.level at call time so it tracks level changes automatically.
+// The room's own voice: a rotating pool of story fragments + radio scraps per
+// level. Reads world.level at call time so it tracks level changes automatically.
 let _ambIdx = 0, _ambLevel = -1;
 function wireAmbientStory() {
   if (!events) return;
@@ -730,9 +859,12 @@ function wireAmbientStory() {
     if (!world) return null;
     const lv = world.level;
     if (lv !== _ambLevel) { _ambLevel = lv; _ambIdx = 0; }
-    const pool = ambientFor(lv, _ambIdx);
-    if (!pool.length) return null;
-    return pool[_ambIdx++ % pool.length];
+    return ambientFor(lv, _ambIdx++);
+  };
+  // and a separate pool of radio scraps, surfaced as their own event
+  events.radioLine = () => {
+    if (!world) return null;
+    return radioFor(world.level, radioIdx++);
   };
 }
 
@@ -760,6 +892,11 @@ function onSiteActivated(site, beatIdx, remote) {
   if (!remote) showCinematic([beatFor(world.level, beatIdx)], 2, null);
   // if this completed every objective, open the way
   if (objectives.isComplete()) unlockExit();
+  else if (isHost && monsters && Math.random() < 0.5) {
+    // half the time, activating a node wakes something nearby — an encounter
+    // tied to the story beat rather than to a random timer
+    monsters.stageEncounter(null, site.x, site.z);
+  }
 }
 
 function unlockExit() {
@@ -770,7 +907,12 @@ function unlockExit() {
   audio.doorSlam(player.pos.x + 4, player.pos.z);
   engine.bumpGlitch(1.4);
   audio.heartbeat(1);
-  if (monsters) monsters.escalate(2);
+  if (monsters) {
+    monsters.escalate(2);
+    // opening the way makes a sound the whole level hears — something is
+    // always waiting to see who walks through
+    if (isHost) monsters.stageEncounter(null, player.pos.x, player.pos.z);
+  }
 }
 
 // ---- exit gate: advance the whole party together ----------------------------
@@ -888,6 +1030,19 @@ E('emote-bar').addEventListener('click', (ev) => {
 });
 
 window.addEventListener('keydown', (e) => {
+  // before gameplay: the cold open and level transitions are skippable
+  if (gameState === 'opening') {
+    if (e.code === 'KeyE' || e.code === 'Space' || e.code === 'Enter' || e.code === 'Escape') {
+      e.preventDefault(); skipOpening();
+    }
+    return;
+  }
+  if (gameState === 'transition') {
+    if (e.code === 'KeyE' || e.code === 'Space' || e.code === 'Enter' || e.code === 'Escape') {
+      e.preventDefault(); skipTransition();
+    }
+    return;
+  }
   // during the finale, Enter/E/Space returns to the menu once it has finished
   if (gameState === 'ending') {
     if (!ending || ending.done) {
@@ -914,6 +1069,9 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR' && dead && respawnT <= 0) respawn();
 });
 canvas.addEventListener('click', () => {
+  // tap/click skips the cold open or a level transition (touch has no E key)
+  if (gameState === 'opening') { skipOpening(); return; }
+  if (gameState === 'transition') { skipTransition(); return; }
   if (gameState === 'playing' && !player.mobile && !document.pointerLockElement) {
     canvas.requestPointerLock?.().catch?.(() => {});
   }
@@ -966,6 +1124,52 @@ function updateObjectiveHud() {
 }
 function escapeHtmlMini(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// ---- objective compass -----------------------------------------------------
+// Always points at the next actionable objective (nearest un-activated site, or
+// the exit once unlocked), so nobody has to wander blindly. When the target is
+// on screen the arrow sits on it; when it is off to the side the arrow pins to
+// the screen edge and rotates. Pure UI — no world state changes.
+function updateObjectiveCompass(dt) {
+  const box = E('objective-compass');
+  if (!box) return;
+  if (!world || !objectives || gameState !== 'playing' || dead || ending || cinematic) {
+    box.classList.add('hidden'); return;
+  }
+  let target = null, label = 'OBJECTIVE';
+  if (exitUnlocked) {
+    label = 'EXIT';
+    const p = window.__dbg && window.__dbg.exitPos ? window.__dbg.exitPos() : null;
+    if (p) target = p;
+  } else {
+    const sites = objectiveSites(world, world.level);
+    const next = sites.find((s) => !objectives.activated.has(s.key));
+    if (next) target = { x: (next.cx + 0.5) * CELL, z: (next.cz + 0.5) * CELL };
+  }
+  if (!target) { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+
+  const dx = target.x - player.pos.x, dz = target.z - player.pos.z;
+  const dist = Math.hypot(dx, dz);
+  // bearing of the target relative to the player's facing (yaw 0 = -Z)
+  const fwd = Math.atan2(-dx, -dz);
+  let rel = fwd - player.yaw;
+  while (rel > Math.PI) rel -= Math.PI * 2;
+  while (rel < -Math.PI) rel += Math.PI * 2;
+
+  const arrow = E('oc-arrow');
+  const edge = Math.abs(rel) > 0.6;
+  box.classList.toggle('edge', edge);
+  box.classList.toggle('near', dist < 8);
+  const r = 44;
+  const ox = Math.sin(rel) * r;
+  const oy = -Math.cos(rel) * r;
+  arrow.style.transform = `translate(${ox}px, ${oy}px) rotate(${rel}rad)`;
+  E('oc-label').textContent = label;
+  E('oc-dist').textContent = exitUnlocked
+    ? (dist < 8 ? 'THE WAY OUT' : `${Math.round(dist)}m`)
+    : `${Math.round(dist)}m`;
 }
 
 // ---- cinematic typewriter overlay ------------------------------------------
@@ -1022,6 +1226,15 @@ function skipCinematic() {
 // ---- the ending ------------------------------------------------------------
 function startEnding() {
   if (ending) return;
+  // a level transition or cold open may still be on screen — clear it
+  if (opening) { opening.dispose(); opening = null; }
+  if (transition) { transition.dispose(); transition = null; }
+  E('opening-overlay') && E('opening-overlay').classList.add('hidden');
+  E('opening-hint') && E('opening-hint').classList.add('hidden');
+  E('opening-line') && (E('opening-line').textContent = '');
+  E('opening-card') && E('opening-card').classList.add('hidden');
+  E('objective-compass') && E('objective-compass').classList.add('hidden');
+  audio.stopStreetAmbience();
   gameState = 'ending';
   paused = false;
   player.enabled = false;
@@ -1213,7 +1426,6 @@ function monsterDiagLogger(dt) {
 // main loop
 let last = performance.now();
 let sendAcc = 0;
-let objHudAcc = 0;
 let fpsFrames = 0, fpsTime = 0, fpsValue = 60, lowFpsT = 0, autoDropped = false;
 
 function loop() {
@@ -1243,6 +1455,20 @@ function loop() {
   // the finale owns the camera and the scene — run it and stop here
   if (gameState === 'ending') {
     if (ending) { ending.tickAnimation(dt); ending.update(dt); }
+    engine.render(dt, now / 1000);
+    return;
+  }
+
+  // the cold open / level transitions are story mode: camera is scripted, the
+  // world keeps streaming underneath, gameplay is suspended until they finish
+  if (gameState === 'opening' || gameState === 'transition') {
+    if (opening) opening.update(dt);
+    if (transition) transition.update(dt);
+    if (worldMgr && world) worldMgr.ensure(player.pos.x, player.pos.z);
+    if (worldMgr) worldMgr.updateDoors(dt);
+    registerChunkLights();
+    if (lightMgr && world) lightMgr.update(dt, player.pos.x, player.pos.z, camera);
+    remotePlayers.update(dt, camera.position);
     engine.render(dt, now / 1000);
     return;
   }
@@ -1307,6 +1533,10 @@ function loop() {
       unlockExit();
     }
   }
+
+  // objective guidance: a compass to the next goal (throttled to ~5Hz)
+  lastCompass += dt;
+  if (lastCompass > 0.2) { lastCompass = 0; updateObjectiveCompass(dt); }
 
   screamCooldown = Math.max(0, screamCooldown - dt);
   // host streams monsters at 8Hz
@@ -1400,8 +1630,15 @@ function leaveToMenu() {
   cinematic = null;
   objectives = null;
   exitUnlocked = false;
+  // re-arm the cold open for the next fresh session
+  openingDone = false;
   if (ending) { ending.dispose(); ending = null; }
+  if (opening) { opening.dispose(); opening = null; }
+  if (transition) { transition.dispose(); transition = null; }
+  E('opening-overlay') && E('opening-overlay').classList.add('hidden');
+  E('objective-compass') && E('objective-compass').classList.add('hidden');
   audio.stopAmbience();
+  audio.stopStreetAmbience();
   if (worldMgr) {
     for (const key of [...worldMgr.chunks.keys()]) worldMgr.unload(key);
     worldMgr = null;
@@ -1442,6 +1679,23 @@ window.__dbg = {
   },
   cinematicActive: () => !!cinematic,
   skipCinematic: () => skipCinematic(),
+  openingActive: () => !!opening,
+  openingPhase: () => (opening ? opening.phases[opening.phaseIdx].key : null),
+  startOpening: () => startOpening(),
+  skipOpening: () => skipOpening(),
+  transitionActive: () => !!transition,
+  transitionKind: () => (transition ? transition.kind : null),
+  startTransition: (lv) => startTransition(lv !== undefined ? lv : (world ? world.level : 0)),
+  skipTransition: () => skipTransition(),
+  compass: () => {
+    const box = E('objective-compass');
+    if (!box) return null;
+    return {
+      visible: !box.classList.contains('hidden'),
+      label: E('oc-label') ? E('oc-label').textContent : null,
+      dist: E('oc-dist') ? E('oc-dist').textContent : null,
+    };
+  },
   endingActive: () => !!ending,
   // test helper: walk the whole objective chain without moving the player
   completeObjectives: () => {
