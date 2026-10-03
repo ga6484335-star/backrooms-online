@@ -144,6 +144,21 @@ async function main() {
   check(c && c.spillAngle > c.angle, 'flashlight has a wider spill halo');
   check(c && c.decay === 2 && c.distance >= 60, 'flashlight has physical falloff and real throw');
   check(c && c.intensity > 0, 'flashlight carries natural intensity');
+  check(c && c.map === true && c.cookie > 0, 'flashlight projects a shaped beam cookie, not a flat disc');
+  check(c && c.spillIntensity > 0 && c.spillIntensity < c.intensity * 0.5, 'spill halo is dimmer than the core');
+
+  // held-light aim lag: a sustained turn must leave the beam trailing behind,
+  // but only by a small, felt amount (never enough to hurt aiming)
+  const lag = await cdp.eval(`JSON.stringify(window.__dbg.flashAimLag(2.0, 0))`);
+  const lg = JSON.parse(lag);
+  check(lg && lg.lagRad > 0.01 && lg.lagRad < 0.6, 'flashlight aim trails a sustained turn by a tiny, felt amount (' + (lg && lg.lagRad.toFixed(4)) + ' rad)');
+  // a faster whip lags a little more than a slow pan
+  const slow = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.flashAimLag(1.0, 0))`));
+  const fast = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.flashAimLag(3.5, 0))`));
+  check(fast.lagRad > slow.lagRad, 'the beam lags more under a faster turn (physical inertia)');
+  // vertical lag exists too (looking up/down has its own weight)
+  const vert = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.flashAimLag(0, 2.0))`));
+  check(vert.lagRad > 0.005, 'flashlight also lags vertically when looking up/down (' + vert.lagRad.toFixed(4) + ' rad)');
 
   // console errors?
   const errs = cdp.events.filter((e) => e.method === 'Runtime.exceptionThrown');

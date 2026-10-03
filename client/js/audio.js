@@ -1109,6 +1109,60 @@ export class AudioEngine {
     }
   }
 
+  // a very quiet, warm electrical hum while the lamp is lit — a driver/ballast
+  // whine you only notice once it stops. Fades in/out so toggling is smooth.
+  flashlightHum(on) {
+    if (!on) {
+      // stop without forcing an AudioContext to spin up just to switch off
+      if (this.loops.has('flashhum')) {
+        this.loops.get('flashhum')();
+        this.loops.delete('flashhum');
+      }
+      return;
+    }
+    if (!this.ensure()) return;
+    if (this.loops.has('flashhum')) return;
+    {
+      const ctx = this.ctx;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, ctx.currentTime);
+      g.gain.linearRampToValueAtTime(0.006, ctx.currentTime + 0.12);
+      const o1 = ctx.createOscillator(); o1.type = 'sine'; o1.frequency.value = 118;
+      const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.value = 236;
+      const g2 = ctx.createGain(); g2.gain.value = 0.35;
+      // faint noise floor so it reads as an electronic driver, not a pure tone
+      const n = ctx.createBufferSource(); n.buffer = this._noiseBuf; n.loop = true;
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 900; bp.Q.value = 0.7;
+      const ng = ctx.createGain(); ng.gain.value = 0.25;
+      o1.connect(g); o2.connect(g2).connect(g);
+      n.connect(bp).connect(ng).connect(g);
+      g.connect(this.master);
+      o1.start(); o2.start(); n.start();
+      this.loops.set('flashhum', () => {
+        const t = ctx.currentTime;
+        g.gain.cancelScheduledValues(t);
+        g.gain.setValueAtTime(g.gain.value, t);
+        g.gain.linearRampToValueAtTime(0.0001, t + 0.1);
+        try { o1.stop(t + 0.12); o2.stop(t + 0.12); n.stop(t + 0.12); } catch (e) {}
+      });
+    }
+  }
+
+  // the body rattling against the grip on a hard turn / jolt. Tiny and dry.
+  flashlightRattle(amt = 0.3) {
+    if (!this.ensure()) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const s = ctx.createBufferSource(); s.buffer = this._noiseBuf;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass';
+    f.frequency.value = 1400 + Math.random() * 600; f.Q.value = 5;
+    const g = ctx.createGain();
+    const a = Math.min(0.05, 0.012 + amt * 0.05);
+    g.gain.setValueAtTime(a, t);
+    g.gain.exponentialRampToValueAtTime(0.0006, t + 0.03);
+    s.connect(f).connect(g).connect(this.master);
+    s.start(t, Math.random(), 0.04);
+  }
+
   // ---- ending ambience -----------------------------------------------------
   // A wind-and-hum bed for the impossible surface world. `warm` crossfades from
   // the Backrooms hum toward a bright, open air — so the reveal is audible: the

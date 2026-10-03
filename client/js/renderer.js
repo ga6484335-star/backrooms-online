@@ -125,7 +125,12 @@ export class RendererEngine {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
-    this.renderer.shadowMap.enabled = false; // point light shadows are too expensive; we fake AO via baked tints
+    // Dynamic shadow maps are ON so the flashlight can carve real shadows out
+    // of the beam (doorframes, props). Only the flashlight spot casts; the rest
+    // of the world stays unlit, so the cost is one 1024² map at high/ultra and
+    // nothing at low (the spot stops casting there).
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(72, 1, 0.08, 220);

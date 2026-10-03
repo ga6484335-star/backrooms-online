@@ -169,6 +169,7 @@ function applySettings(s) {
   voice.setEnabled(s.voice);
   if (worldMgr) worldMgr.setQuality(s.quality);
   if (lightMgr) lightMgr.setQuality(s.quality);
+  if (flash) flash.setQuality(s.quality);
 }
 
 // ---------------------------------------------------------------------------
@@ -2005,7 +2006,7 @@ function loop() {
   updateFlares(dt);
   registerChunkLights();
   lightMgr.update(dt, player.pos.x, player.pos.z, camera);
-  if (flash) flash.update(dt);
+  if (flash) flash.update(dt, player);
   updateBatteryHud();
   remotePlayers.update(dt, camera.position);
   monsters.update(dt, player, remotePlayers, null);
@@ -2301,8 +2302,40 @@ window.__dbg = {
     decay: flash.spot.decay,
     intensity: flash.spot.intensity,
     spillAngle: flash.spill.angle,
+    spillIntensity: flash.spill.intensity,
+    map: !!flash.spot.map,
+    cookie: flash.spot.map ? (flash.spot.map.image ? flash.spot.map.image.width : 0) : 0,
+    shadows: !!flash.spot.castShadow,
+    hand: [flash._hand.x, flash._hand.y, flash._hand.z],
+    mount: [flash._mount.x, flash._mount.y, flash._mount.z],
     aim: [flash._aim.x, flash._aim.y, flash._aim.z],
   } : null),
+  // aim lag probe: settle the beam onto a still view, then rotate the camera at
+  // a constant rate and read the steady-state trailing angle. A held light lags
+  // a sustained turn by ~(turn rate × time constant) — felt, not disorienting.
+  flashAimLag: (omega = 2, pitchOmega = 0) => {
+    if (!flash || !flash.on) return null;
+    const dt = 0.016;
+    const setView = (yaw, pitch) => {
+      player.yaw = player.yawTarget = yaw;
+      player.pitch = player.pitchTarget = pitch;
+      camera.rotation.order = 'YXZ';
+      camera.rotation.y = yaw; camera.rotation.x = pitch;
+      camera.updateMatrixWorld(true);
+    };
+    setView(0, 0);
+    for (let i = 0; i < 90; i++) { setView(0, 0); flash.update(dt, player); }
+    let yaw = 0, pitch = 0;
+    for (let i = 0; i < 100; i++) {
+      yaw += omega * dt; pitch += pitchOmega * dt;
+      setView(yaw, pitch);
+      flash.update(dt, player);
+    }
+    const f = new THREE.Vector3(); camera.getWorldDirection(f);
+    const a = flash._aim;
+    const dot = Math.max(-1, Math.min(1, f.x * a.x + f.y * a.y + f.z * a.z));
+    return { lagRad: Math.acos(dot), omega, pitchOmega, aim: [a.x, a.y, a.z], fwd: [f.x, f.y, f.z] };
+  },
   voiceSpeaking: () => voice.speaking,
   voiceSupported: () => voice.supported,
   voiceEnabled: () => voice.enabled,
