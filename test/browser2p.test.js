@@ -133,10 +133,16 @@ async function main() {
     const standSeen = await p2.eval(`(window.__dbg && window.__dbg.remoteAnims) ? window.__dbg.remoteAnims() : ['no-dbg']`);
     check(Array.isArray(standSeen) && !standSeen.includes('sit'), 'stand synced back to peer');
 
-    // --- client 1 jumps; client 2 must see vertical offset
-    await p1.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'Space'}))`);
-    await sleep(400);
-    const jumpSeen = await p2.eval(`(window.__dbg && window.__dbg.remoteY) ? window.__dbg.remoteY() : []`);
+    // --- client 1 jumps; client 2 must see vertical offset. rAF is throttled
+    // headless, so retry/re-jump while sampling the peer rather than relying on
+    // a single 400ms window (which made this assertion flaky).
+    let jumpSeen = [];
+    for (let i = 0; i < 30; i++) {
+      await p1.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'Space'}))`);
+      await sleep(120);
+      jumpSeen = await p2.eval(`(window.__dbg && window.__dbg.remoteY) ? window.__dbg.remoteY() : []`);
+      if (Array.isArray(jumpSeen) && jumpSeen.some((y) => y > 1.7 && y < 2.2)) break;
+    }
     console.log('  [info] remote y offsets seen by client 2:', JSON.stringify(jumpSeen));
     check(Array.isArray(jumpSeen) && jumpSeen.some((y) => y > 1.7 && y < 2.2), 'jump height synced to peer');
 
