@@ -2182,6 +2182,7 @@ window.__dbg = {
     dropFlare(false, net.id, fx, fz, null);
   },
   setExposure: (v) => { exposure = Math.max(0, Math.min(1, v)); },
+  tickHazard: (dt = 1 / 60) => { updateHazard(dt, (performance.now() - startTime) / 1000); return exposure; },
   setElapsed: (v) => { startTime = performance.now() - v * 1000; },
   loreOpen: () => loreOverlayOpen,
   loreShown: () => (loreOverlayOpen ? { title: E('lore-title') ? E('lore-title').textContent : null, body: E('lore-body') ? E('lore-body').textContent : null } : null),
@@ -2236,6 +2237,7 @@ window.__dbg = {
     return objectives.puzzleDone();
   },
   giveFlare: (n = 1) => { inventory.flare += n; updateBatteryHud(); return inventory.flare; },
+  setFlares: (n = 0) => { inventory.flare = Math.max(0, n | 0); updateBatteryHud(); return inventory.flare; },
   startEnding: () => startEnding(),
   endEnding: () => endEnding(),
   flash: () => (flash ? { on: flash.on, battery: flash.battery } : null),
@@ -2266,6 +2268,8 @@ window.__dbg = {
   endingTime: () => (ending ? ending.t : -1),
   endingStage: () => (ending ? (ENDING.stages[ending.stageIdx] || {}).key || null : null),
   endingOverlayVisible: () => !!(ending && ending._overlay && ending._overlay.visible),
+  endingWatch: () => (ending ? +ending._faceCam.toFixed(3) : -1),
+  endingFiguresYaw: () => (ending ? ending._figures.map((g) => +g.rotation.y.toFixed(3)) : []),
   monsters: () => (monsters ? monsters.monsters.size : 0),
   monsterTypes: () => (monsters ? [...monsters.monsters.values()].map((m) => `${m.type}:${m.state}`) : []),
   monsterIds: () => (monsters ? [...monsters.monsters.keys()] : []),

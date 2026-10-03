@@ -46,6 +46,7 @@ export class EndingSequence {
     this._cards = new Set();
     this._warm = 0;
     this._sfx = new Set();
+    this._faceCam = 0;   // 0..1 blend: the others turn to look at you at the reveal
     this._buildSet();
   }
 
@@ -257,8 +258,25 @@ export class EndingSequence {
 
   tickAnimation(dt) {
     this.tickEnvironment();
-    // figures settle and slowly turn so they are not statues
-    for (const g of this._figures) g.rotation.y += dt * 0.05;
+    // The others are not statues: they turn to watch YOU as the twist lands.
+    // A slow, uniform head-turn — unsettling precisely because it is calm and
+    // late, not a jump scare. `_faceCam` eases in once the seam is visible.
+    const st = ENDING.stages[Math.max(0, this.stageIdx)] || ENDING.stages[0];
+    const watch = st.env === 'crack' || st.env === 'void';
+    this._faceCam += ((watch ? 1 : 0) - this._faceCam) * (1 - Math.pow(0.02, dt));
+    for (const g of this._figures) {
+      g.rotation.y += dt * 0.05 * (1 - this._faceCam); // idle turn fades out
+      if (this._faceCam > 0.01) {
+        // face the camera (avatars render forward at yaw + PI, so the facing
+        // angle is atan2(dx,dz) - PI)
+        const dx = this.camera.position.x - g.position.x;
+        const dz = this.camera.position.z - g.position.z;
+        const face = Math.atan2(dx, dz) - Math.PI;
+        let d = face - g.rotation.y;
+        d = Math.atan2(Math.sin(d), Math.cos(d));
+        g.rotation.y += d * Math.min(1, dt * 2.2) * this._faceCam;
+      }
+    }
   }
 
   dispose() {

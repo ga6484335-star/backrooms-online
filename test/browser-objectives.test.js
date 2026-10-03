@@ -266,7 +266,8 @@ async function main() {
     await cdp.eval(`window.__dbg.skipCinematic()`);
 
     // ---- flares: consumable light that draws the monsters ------------------
-    check((await cdp.eval(`window.__dbg.inventory().flare`)) === 0, 'party starts with no flares');
+    // the loot just taken may itself have been a flare, so zero the pocket first
+    check((await cdp.eval(`window.__dbg.setFlares(0)`)) === 0, 'party starts with no flares');
     check((await cdp.eval(`window.__dbg.giveFlare(2)`)) === 2, 'flare picked up into the inventory');
     check((await cdp.eval(`window.__dbg.flares().length`)) === 0, 'no flare burning before it is lit');
     await cdp.eval(`window.__dbg.dropFlare()`);
@@ -289,10 +290,15 @@ async function main() {
       if ((await cdp.eval(`window.__dbg.hazard().inside`)) === true) { insideOK = true; break; }
     }
     check(insideOK === true, 'player can stand in a hazard cell');
-    await cdp.eval(`window.__dbg.setElapsed(${5.6 - 2.0 + 0.2})`); // just inside the active window
-    await cdp.eval(`window.__dbg.setExposure(0.15)`);
-    await sleep(700);
-    const hzIn = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.hazard())`));
+    // drive hazard ticks by hand: rAF is throttled headless, so a sleep-based
+    // wait can land only a frame or two and miss the exposure gain entirely.
+    const hzIn = JSON.parse(await cdp.eval(`(async () => {
+      window.__dbg.setElapsed(${5.6 - 2.0 + 0.2}); // just inside the active window
+      window.__dbg.setExposure(0.15);
+      await new Promise(r => setTimeout(r, 60));
+      for (let i = 0; i < 12; i++) window.__dbg.tickHazard(1 / 60);
+      return JSON.stringify(window.__dbg.hazard());
+    })()`));
     check(hzIn.exposure > 0.15, `active surge raises exposure (${hzIn.exposure})`);
     await cdp.eval(`window.__dbg.setElapsed(0.2)`);
     await cdp.eval(`window.__dbg.setExposure(0)`);
@@ -326,6 +332,9 @@ async function main() {
     // the camcorder overlay returns for the replay: the players are the recording
     check((await cdp.eval(`window.__dbg.endingOverlayVisible()`)) === true,
       'the camcorder overlay returns at the replay');
+    // the "others" stop idling and turn to watch you as the twist lands
+    check((await cdp.eval(`window.__dbg.endingWatch()`)) > 0.5,
+      'the others turn to watch you at the reveal');
     await cdp.eval(`window.__dbg._tickEnding(8, 0.5)`); // clear the tail delay
     const tailShown = await cdp.eval(`!document.getElementById('ending-tail').classList.contains('hidden')`);
     check(tailShown === true, 'ending tail (SIGNAL RETAINED…) is shown');
