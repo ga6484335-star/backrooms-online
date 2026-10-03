@@ -77,3 +77,13 @@
 - HUD: `#objective-compass` (arrow/edge rotation via `updateObjectiveCompass`, throttled 5Hz) points to the next un-activated site or the exit. Objective nodes have a tall emissive beacon + cold point light in `chunk.js`.
 - Monsters: `stageEncounter(typeOrNull, x, z)` queues a story-beat spawn (next host tick, out of the view cone) — fired on arrival, on exit unlock, ~50% of node activations. `pickStagedType` chooses from `LEVEL_POOLS`. Director pacing is faster; first encounter guaranteed by ~55m or 20s. `events.radioLine` surfaces `RADIO[level]` scraps.
 - Fixed latent bugs: `wireAmbientStory` treated `ambientFor()` (a string) as an array; `playT` was declared inside a `switch` case but used in later cases (TDZ).
+
+## Signature hazards (per level) + puzzle lock
+- `objectives.js` `HAZARDS`/`hazardFor/hazardCells/hazardPhase/hazardDps`: a deterministic positional threat per level (`none/steam/current/flood/malfunction/lightsout/surge2`). Warn/active windows are a pure function of `(world, level, shared elapsed t)`; cells come from an INDEPENDENT rng stream (`hashStr(seed, 'haz:'+level)`) so site/exit/cache PRNG indices are untouched. Active cells never coincide with a site, the exit, or a cache.
+- `PUZZLES`/`puzzleFor/puzzleCells/puzzleSites`: a keyed lock that seals the exit on every level (independent rng stream `pz:<level>`, memoized, guaranteed solvable — falls back to the exit cell). `ObjectiveTracker` now needs `puzzleDone()` as well as every plan objective before `isComplete()`.
+- `main.js`: `updateHazard` (local exposure/damage, HUD, blackout dim), `updateHazardFloors` (pulsing floor sheets per shared clock), `collectPuzzle`/`onPuzzleCollected`, loot pickup (`takeLoot`). All relays go through `net.sendEvent`.
+- `rooms.js` WORLD_EVENTS must include `loot` and `puzzle` so late joiners replay them.
+- `chunk.js`: `hazardGroup` floor quads + risk/reward crates; `buildPuzzleNode` (warm breaker pedestal, distinct from the cold objective beacons).
+- Debug hooks: `__dbg.hazard()/hazardPos()/hazardAt(t)/lootPos()`, `__dbg.puzzlePos()/puzzleGoal()/completePuzzle()`, `__dbg.objectives()` reports `puzzle/puzzleGoal/puzzleDone`.
+- Headless caution: `gameState='transition'` blocks the rAF loop, so per-frame hazard/puzzle updates don't run — tests must clear transitions first (see `browser-objectives.test.js`).
+
