@@ -20,6 +20,7 @@
 - `node test/objectives.test.mjs` — pure-Node progression/story/ending/opening logic (186 assertions).
 - `node test/browser-objectives.test.js` — headless full progression + finale flow.
 - `node test/browser-opening.test.js` — headless cold open: shot order, voice engine, flashlight beam shape, hand-off (drives `__dbg._tickOpen`).
+- `node test/pages.test.js` — Pages-style boot check (now self-hosts the server on :13500; pass a URL to test an external target).
 - Debug hooks: `window.__dbg` in main.js (state, pos, chunks, flash, flashlightCone, remoteAnims, remoteY, plus level/objectives/sites/exitPos/cinematicActive/skipCinematic/endingActive/completeObjectives/startEnding/endEnding/interact/nearInteractable/teleport, openActive/openState/transitionActive/_tickOpen/_tickTransition, voiceSupported/voiceEnabled/speakerFor), `window.__seed`, `window.__lastRemoteEmote`.
 - KNOWN HEADLESS FLAKE: the `jump`/`jump height synced` assertions in browser.test.js / browser2p.test.js are flaky in SwiftShader (baseline fails too). Not a regression.
 
