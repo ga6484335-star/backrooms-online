@@ -21,7 +21,7 @@ import { MenuUI } from './menu.js';
 import { Flashlight } from './flashlight.js';
 import { noteText } from './notes.js';
 import { getLevel } from './levels.js';
-import { ObjectiveTracker, objectiveSites, exitCellFor } from './objectives.js';
+import { ObjectiveTracker, objectiveSites, exitCellFor, loreCacheFor, cacheHintFor } from './objectives.js';
 import { introFor, epilogueFor, beatFor, ambientFor, radioFor, nextStoryLevel, isFinalLevel, levelTitle } from './story.js';
 import { EndingSequence } from './ending.js';
 import { OpeningSequence } from './opening.js';
@@ -59,6 +59,7 @@ let startTime = 0;
 let doorToggles = new Map(); // "cx,cz,dir" -> boolean (net-synced; render state applied on chunk load)
 let keyInventory = new Set(); // held rusty keys
 let noteOverlayOpen = false;
+let loreOverlayOpen = false;
 let flash = null;
 let dead = false;           // local player death state
 let respawnT = 0;           // seconds until respawn allowed
@@ -77,6 +78,8 @@ let objHudAcc = 0;          // objective HUD refresh accumulator
 let lastCompass = 0;        // objective compass refresh accumulator
 let ambientStoryIdx = 0;    // rotating ambient story pool index
 let radioIdx = 0;           // rotating radio line index
+let cachesFound = new Set(); // lore cache keys the party has opened (relayed)
+let cacheHintShown = new Set(); // levels whose hidden-room clue has been teased
 
 // ---------------------------------------------------------------------------
 // reconnection state
@@ -286,6 +289,17 @@ net.on('ev', (m) => {
       if (!ending) startEnding();
       break;
     }
+    case 'cache': {
+      // a peer found a hidden lore cache — mark it found so late opens don't
+      // re-reward, and surface a quiet shared notification (not the text itself,
+      // which each player reads in their own overlay if they go there).
+      if (m.data && m.data.key) {
+        const first = !cachesFound.has(m.data.key);
+        cachesFound.add(m.data.key);
+        if (first && m.data.pid !== net.id) flashText('SOMEONE FOUND SOMETHING IN THE DARK.');
+      }
+      break;
+    }
     case 'caught': {
       // someone was caught — if it was us, death flow runs locally via onCaught
       if (m.data.pid === -1 || m.data.pid === net.id) {
@@ -440,9 +454,15 @@ function applyWorldReplay(m) {
   }
   // objective activations belong to the *current* level — apply them last
   for (const ev of m.events || []) {
-    if (!ev || ev.kind !== 'obj' || !ev.data || !objectives) continue;
-    if (ev.data.kind === 'site' && ev.data.key) objectives.activateSite(ev.data.key);
-    else if (ev.data.kind === 'hold') objectives.holdT = 99999;
+    if (!ev || !ev.data) continue;
+    if (ev.kind === 'obj' && objectives) {
+      if (ev.data.kind === 'site' && ev.data.key) objectives.activateSite(ev.data.key);
+      else if (ev.data.kind === 'hold') objectives.holdT = 99999;
+    } else if (ev.kind === 'cache' && ev.data.key) {
+      // replay: mark pre-existing discoveries found so late joiners see the
+      // cache already opened rather than re-rewarding it
+      cachesFound.add(ev.data.key);
+    }
   }
   if (objectives && objectives.isComplete()) unlockExit();
   if (sawEnding && gameState === 'playing' && !ending) startEnding();
@@ -801,7 +821,9 @@ function findInteractable() {
   if (!worldMgr) return null;
   const it = worldMgr.nearestInteractable(
     player.pos.x, player.pos.z,
-    (key) => (objectives && objectives.activated.has(key)) || (key.startsWith('exit:') && !exitUnlocked),
+    (key) => (objectives && objectives.activated.has(key))
+      || (key.startsWith('cache:') && cachesFound.has(key))
+      || (key.startsWith('exit:') && !exitUnlocked),
   );
   return it;
 }
@@ -815,6 +837,7 @@ function doorPromptText(d) {
 
 function doInteract() {
   if (dead) return;
+  if (loreOverlayOpen) { closeLore(); return; }
   if (noteOverlayOpen) { closeNote(); return; }
   const it = currentInteract;
   if (!it) return;
@@ -822,6 +845,8 @@ function doInteract() {
     openNote(it.data);
   } else if (it.type === 'site') {
     activateSite(it.data);
+  } else if (it.type === 'cache') {
+    openLoreCache(it.data);
   } else if (it.type === 'exit') {
     useExit(it.data);
   } else if (it.type === 'battery') {
@@ -905,6 +930,12 @@ function onSiteActivated(site, beatIdx, remote) {
     monsters.escalate(1);
   }
   if (!remote) showCinematic([beatFor(world.level, beatIdx)], 2, null);
+  // every so often the room leaks a clue about its hidden cache — the pull that
+  // sends a curious player off the path (delivered as ambient narration, once)
+  if (beatIdx === 1 && world && !cacheHintShown.has(world.level)) {
+    cacheHintShown.add(world.level);
+    setTimeout(() => { if (!dead && world) showCinematic([cacheHintFor(world.level)], 2, null); }, 3400);
+  }
   // if this completed every objective, open the way
   if (objectives.isComplete()) unlockExit();
   else if (isHost && monsters && Math.random() < 0.5) {
@@ -928,6 +959,48 @@ function unlockExit() {
     // always waiting to see who walks through
     if (isHost) monsters.stageEncounter(null, player.pos.x, player.pos.z);
   }
+}
+
+// ---- hidden lore cache: an optional secret that deepens the story -----------
+// Opening it is not required to progress; it rewards the player who wanders off
+// the path with a quiet, personal reveal, and is relayed to the party so co-op
+// players share the discovery (each client renders its own local overlay).
+function openLoreCache(it) {
+  if (!it || !it.key) return;
+  const first = !cachesFound.has(it.key);
+  cachesFound.add(it.key);
+  if (first) net.sendEvent('cache', { key: it.key, level: world ? world.level : 0, pid: net.id });
+  showLore(it);
+  if (first) {
+    // finding a secret is loud to the thing that watches: a small scare beat
+    audio.keyPick();
+    audio.distantMetal(0.7);
+    engine.bumpGlitch(0.8);
+    if (monsters) { monsters.alertArea(it.x, it.z, 24); monsters.escalate(1); }
+  }
+}
+
+function showLore(it) {
+  const lore = it.lore || (world ? loreCacheFor(world, world.level).lore : null);
+  if (!lore) return;
+  const title = E('lore-title');
+  const body = E('lore-body');
+  if (title) title.textContent = lore.title || it.label || 'ARCHIVE';
+  if (body) body.textContent = lore.body || '';
+  const ov = E('lore-overlay');
+  if (ov) ov.classList.remove('hidden');
+  loreOverlayOpen = true;
+  if (voice) voice.speak(`— ${lore.title}. ${lore.body}`, { mood: 'whisper' });
+  audio.paper();
+}
+function closeLore() {
+  if (!loreOverlayOpen) return;
+  loreOverlayOpen = false;
+  const ov = E('lore-overlay');
+  if (ov) ov.classList.add('hidden');
+  if (voice) voice.stop();
+  audio.paper();
+  if (player.mobile && mobile) mobile.show();
 }
 
 // ---- exit gate: advance the whole party together ----------------------------
@@ -974,6 +1047,26 @@ window.addEventListener('keydown', (e) => {
   if (noteOverlayOpen && (e.code === 'Escape' || e.code === 'KeyX')) {
     e.preventDefault();
     closeNote();
+  }
+});
+
+// lore overlay close controls (same interaction grammar as notes)
+for (const id of ['lore-close-btn', 'lore-x']) {
+  const el = E(id);
+  if (!el) continue;
+  el.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); closeLore(); });
+  el.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); closeLore(); }, { passive: false });
+}
+{
+  const ov = E('lore-overlay');
+  if (ov) ov.addEventListener('touchstart', (e) => {
+    if (e.target === ov) { e.preventDefault(); closeLore(); }
+  }, { passive: false });
+}
+window.addEventListener('keydown', (e) => {
+  if (loreOverlayOpen && (e.code === 'Escape' || e.code === 'KeyX')) {
+    e.preventDefault();
+    closeLore();
   }
 });
 
@@ -1582,13 +1675,14 @@ function loop() {
   // interact prompt
   currentInteract = dead ? null : findInteractable();
   const prompt = E('interact-prompt');
-  if (currentInteract && !noteOverlayOpen) {
+  if (currentInteract && !noteOverlayOpen && !loreOverlayOpen) {
     prompt.classList.remove('hidden');
     E('interact-text').textContent =
       currentInteract.type === 'note' ? 'READ NOTE'
       : currentInteract.type === 'battery' ? 'TAKE BATTERY'
       : currentInteract.type === 'key' ? 'TAKE RUSTY KEY'
       : currentInteract.type === 'site' ? 'ACTIVATE INTAKE NODE'
+      : currentInteract.type === 'cache' ? `OPEN ${(currentInteract.data.label || 'ARCHIVE').toUpperCase()}`
       : currentInteract.type === 'exit' ? (exitUnlocked ? 'ENTER THE EXIT' : 'SEALED — OBJECTIVES REMAIN')
       : doorPromptText(currentInteract.data);
   } else {
@@ -1651,10 +1745,14 @@ function leaveToMenu() {
   E('cinematic-overlay').classList.add('hidden');
   E('ending-overlay').classList.add('hidden');
   noteOverlayOpen = false;
+  loreOverlayOpen = false;
   cinematic = null;
   voice.stop();
   objectives = null;
   exitUnlocked = false;
+  cachesFound = new Set();
+  cacheHintShown = new Set();
+  E('lore-overlay') && E('lore-overlay').classList.add('hidden');
   // re-arm the cold open for the next fresh session
   openingDone = false;
   if (ending) { ending.dispose(); ending = null; }
@@ -1702,6 +1800,21 @@ window.__dbg = {
     const [cx, cz] = exitCellFor(world, world.level);
     return { cx, cz, x: (cx + 0.5) * 4, z: (cz + 0.5) * 4 };
   },
+  cachePos: () => {
+    if (!world) return null;
+    const c = loreCacheFor(world, world.level);
+    return { key: c.key, cx: c.cx, cz: c.cz, x: c.x, z: c.z, label: c.label, room: c.room, lore: c.lore };
+  },
+  cacheFound: () => [...cachesFound],
+  loreOpen: () => loreOverlayOpen,
+  loreShown: () => (loreOverlayOpen ? { title: E('lore-title') ? E('lore-title').textContent : null, body: E('lore-body') ? E('lore-body').textContent : null } : null),
+  openCache: () => {
+    if (!world) return false;
+    const c = loreCacheFor(world, world.level);
+    openLoreCache({ key: c.key, x: c.x, z: c.z, label: c.label, lore: c.lore });
+    return true;
+  },
+  closeLore: () => closeLore(),
   cinematicActive: () => !!cinematic,
   skipCinematic: () => skipCinematic(),
   openingActive: () => !!opening,

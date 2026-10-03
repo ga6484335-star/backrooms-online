@@ -104,6 +104,176 @@ export function exitCellFor(world, level) {
   return [base, 0];
 }
 
+// ---------------------------------------------------------------------------
+// HIDDEN ROOMS / LORE CACHES — optional, exploration-rewarding secrets.
+//
+// Every level hides exactly one "cache" room inside a real generated special
+// room (never a corridor), placed deterministically far from spawn. The cache
+// holds a lore fragment that deepens the story without gating progression, so
+// co-op players are rewarded for splitting up and exploring.
+//
+// Like the sites, placement is a pure function of (seed, level): all clients
+// derive the same location and the same clue, so nothing needs to be networked
+// except the "found" event.
+export const CACHE_PLANS = {
+  0: { label: 'THE FIRST INTAKE', room: 'darkroom' },
+  1: { label: 'CAPSTAN LOGS', room: 'ventroom' },
+  2: { label: 'DUB HOUSE', room: 'monitorroom' },
+  3: { label: 'DROWNED ARCHIVE', room: 'whiteroom' },
+  4: { label: 'OPERATOR DESK', room: 'monitorroom' },
+  5: { label: 'ROOM FORTY', room: 'clockroom' },
+  6: { label: 'THE READ HEAD', room: 'whiteroom' },
+};
+
+export function cachePlanFor(level) {
+  return CACHE_PLANS[level] || CACHE_PLANS[0];
+}
+
+// Find a generated special room of the planned type within `radius` regions of
+// spawn. Deterministic: scans regions in a fixed order from the centre out.
+// Returns {cx, cz, type, region} or null (callers fall back to a highway cell).
+export function cacheCellFor(world, level, radius = 6) {
+  const want = cachePlanFor(level).room;
+  for (let ring = 1; ring <= radius; ring++) {
+    // fixed winding order so every client visits the same regions in the same order
+    for (let rz = -ring; rz <= ring; rz++) {
+      for (let rx = -ring; rx <= ring; rx++) {
+        // only the outer shell of the ring (inner cells were scanned already)
+        if (Math.max(Math.abs(rx), Math.abs(rz)) !== ring) continue;
+        const region = world.regionAt(rx, rz);
+        const s = region.special;
+        if (!s || s.type !== want) continue;
+        // hide it at the far corner of the room so it is not visible from the door
+        const cx = s.x + Math.min(1, s.w - 1);
+        const cz = s.z + Math.min(1, s.h - 1);
+        return { cx, cz, type: s.type, region: `${rx},${rz}` };
+      }
+    }
+  }
+  return null;
+}
+
+// A secondary fallback: any special room at all (lore still rewards exploring).
+export function anyCacheCellFor(world, level, radius = 8) {
+  for (let ring = 1; ring <= radius; ring++) {
+    for (let rz = -ring; rz <= ring; rz++) {
+      for (let rx = -ring; rx <= ring; rx++) {
+        if (Math.max(Math.abs(rx), Math.abs(rz)) !== ring) continue;
+        const s = world.regionAt(rx, rz).special;
+        if (!s || s.type === 'noclipdoor') continue;
+        const cx = s.x + Math.min(1, s.w - 1);
+        const cz = s.z + Math.min(1, s.h - 1);
+        return { cx, cz, type: s.type, region: `${rx},${rz}` };
+      }
+    }
+  }
+  return null;
+}
+
+export function cacheKey(level, cx, cz) { return `cache:${level}:${cx},${cz}`; }
+
+// Memoised per (seed, level) so streaming chunks don't re-scan regions.
+const _cacheMemo = new Map();
+
+// The full cache descriptor for a level, including its resolved cell and the
+// lore fragment it holds. Deterministic; safe to call on every client.
+export function loreCacheFor(world, level) {
+  const memoKey = `${world.seed >>> 0}:${level}`;
+  const hit0 = _cacheMemo.get(memoKey);
+  if (hit0) return hit0;
+  const plan = cachePlanFor(level);
+  let hit = cacheCellFor(world, level);
+  if (!hit) hit = anyCacheCellFor(world, level);
+  let cx, cz;
+  if (hit) { cx = hit.cx; cz = hit.cz; }
+  else {
+    // ultimate fallback: a highway cell well beyond the exit
+    const [ex, ez] = exitCellFor(world, level);
+    cx = ex + 4; cz = ez;
+  }
+  const desc = {
+    key: cacheKey(level, cx, cz),
+    cx, cz,
+    x: (cx + 0.5) * 4, z: (cz + 0.5) * 4,
+    label: plan.label,
+    room: hit ? hit.type : null,
+    lore: loreFor(level),
+  };
+  _cacheMemo.set(memoKey, desc);
+  return desc;
+}
+
+// ---- lore fragments -------------------------------------------------------
+// Deeper than the objective beats: these are the personal, quiet reveals a
+// curious player finds by going off the path. One per level, plus a shared
+// "true" fragment that ties the whole thing together.
+export const LORE = {
+  0: {
+    title: 'A CAMCORDER, STILL TAPING',
+    body: 'The tape in your own camcorder is not blank. It has been running for forty years. '
+      + 'Every frame is this room. Every frame is you, arriving, over and over. You press STOP. '
+      + 'The counter keeps climbing.',
+  },
+  1: {
+    title: 'CAPSTAN LOG 118',
+    body: 'DAY 40. The machine does not lift or pump. It TURNS. We measured the hum against a '
+      + 'wristwatch: one revolution per breath. We are not walking through a building. We are '
+      + 'walking through the inside of a recording being wound.',
+  },
+  2: {
+    title: 'THE DUB HOUSE',
+    body: 'A room of empty chairs facing a screen. On the screen: you, seated in one of them, '
+      + 'watching a screen, watching you. The chairs are warm. The operator\'s chair is warmer.',
+  },
+  3: {
+    title: 'THE DROWNED ARCHIVE',
+    body: 'Everything swallowed by the flood is filed underwater. You find a drawer labelled with '
+      + 'your surname. Inside: the belongings of someone you have never met who remembers being '
+      + 'you. The water keeps them legible. The air would not.',
+  },
+  4: {
+    title: 'ONBOARDING FORM 4-A',
+    body: 'NAME: (yours). ROLE: SUBJECT, then OPERATOR, then SUBJECT AGAIN. The form is a loop. '
+      + 'You have signed it before, in your own hand, in years that have not happened yet. The '
+      + 'pen is still warm.',
+  },
+  5: {
+    title: 'ROOM FORTY',
+    body: 'The door is unlocked. Inside: your bed, made. Your camcorder on the nightstand, '
+      + 'taping the ceiling. On the ceiling, a small red light — the same as yours — winks back. '
+      + 'The room is recording the room. It always was.',
+  },
+  6: {
+    title: 'THE READ HEAD',
+    body: 'Behind the projector, the head itself: an eye the size of a doorway, wet, patient, '
+      + 'slow. It is not looking at you. It is looking at the place you will be standing in ten '
+      + 'seconds. It is always early. That is how it escapes.',
+  },
+};
+
+// A single truth fragment all levels can surface once every cache is found.
+export const LORE_TRUTH = 'THE RECORD HAS NO EDGE. EACH ESCAPE IS A NEW TAKE. '
+  + 'THE ONLY WAY OUT IS TO STOP BEING WATCHED — WHICH IS TO STOP MOVING. WHICH IS TO STOP.';
+
+export function loreFor(level) {
+  return LORE[level] || LORE[0];
+}
+
+// The clue line delivered by a story beat, hinting at the level's hidden room.
+export const CACHE_HINTS = {
+  0: 'A NODE FLICKERS A DIFFERENT PATTERN: SOMETHING ELSE ON THIS FLOOR IS STILL RUNNING.',
+  1: 'THE HUM DROPS FOR A SECOND — FROM A VENT NO MAP SHOWS.',
+  2: 'A MONITOR YOU DID NOT TURN ON SHOWS A ROOM YOU HAVE NOT FOUND.',
+  3: 'THE WATER PULLS, ONCE, TOWARD A DOOR BENEATH IT.',
+  4: 'A PRINTER IN AN EMPTY OFFICE SPITS ONE LINE: "ROOM WITH NO NUMBER."',
+  5: 'A KEY ON A RED RIBBON, WARM, WITH NO NUMBER CUT INTO IT YET.',
+  6: 'THE PROJECTOR BEAM BENDS — SOMEWHERE, A DARK ROOM IS STILL IN FOCUS.',
+};
+
+export function cacheHintFor(level) {
+  return CACHE_HINTS[level] || CACHE_HINTS[0];
+}
+
 // Co-op objective tracker. Holds only serializable state so it can be snapshotted
 // into the `obj` event and replayed for late joiners / reconnects.
 export class ObjectiveTracker {

@@ -147,6 +147,26 @@ async function main() {
     check(obj.activated.length === 1, `objective tracked (${obj.activated.length}/3)`);
     check(obj.complete === false, 'not complete after one site');
 
+    // ---- hidden lore cache: optional secret, deterministic, net-independent
+    const cache = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.cachePos())`));
+    check(!!cache && cache.key.startsWith('cache:'), `hidden cache exists (${cache.label})`);
+    check(typeof cache.lore.body === 'string' && cache.lore.body.length > 0, 'cache carries a lore fragment');
+    check((await cdp.eval(`window.__dbg.cacheFound()`)).length === 0, 'cache starts unfound');
+    await cdp.eval(`window.__dbg.teleport(${cache.x}, ${cache.z})`);
+    await sleep(1400);
+    const nearCache = await cdp.eval(`(() => { const it = window.__dbg.nearInteractable(); return it ? it.type : null; })()`);
+    check(nearCache === 'cache', `near hidden cache after teleport (${nearCache})`);
+    const actedCache = await cdp.eval(`window.__dbg.interact()`);
+    check(actedCache === 'cache', `interact opened the cache (${actedCache})`);
+    check((await cdp.eval(`window.__dbg.loreOpen()`)) === true, 'lore overlay opens');
+    const shown = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.loreShown())`));
+    check(!!shown && shown.body.length > 0, `lore text rendered: "${String(shown.title).slice(0, 30)}"`);
+    check((await cdp.eval(`window.__dbg.cacheFound()`)).length === 1, 'cache recorded as found');
+    await cdp.eval(`window.__dbg.closeLore()`);
+    check((await cdp.eval(`window.__dbg.loreOpen()`)) === false, 'lore overlay closes');
+    check((await cdp.eval(`window.__dbg.exitUnlocked()`)) === false, 'finding a secret does not unlock the exit');
+    await cdp.eval(`window.__dbg.skipCinematic()`);
+
     // exit must be SEALED before objectives are done
     const exit = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.exitPos())`));
     await cdp.eval(`window.__dbg.teleport(${exit.x}, ${exit.z})`);

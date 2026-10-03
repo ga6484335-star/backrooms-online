@@ -239,6 +239,37 @@ body {
 }
 #note-x:active { color: #2a2118; }
 
+/* ---------------- lore cache (hidden archive) ---------------- */
+#lore-overlay { position: fixed; inset: 0; z-index: 31; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.72); }
+.lore-paper {
+  position: relative; background: #14100c; color: #d8c9a4; max-width: min(460px, 88vw);
+  padding: 40px 34px 32px; font-size: 15px; line-height: 1.75; letter-spacing: .5px;
+  border: 1px solid #4a3a26; box-shadow: 0 12px 70px #000, inset 0 0 60px rgba(255,150,60,.05);
+  background-image: repeating-linear-gradient(0deg, transparent, transparent 27px, rgba(120,90,50,.12) 28px);
+}
+.lore-eyebrow {
+  font-size: 10px; letter-spacing: 4px; color: #c07a3a; margin-bottom: 10px;
+}
+.lore-paper h3 {
+  margin: 0 0 14px; font-size: 16px; letter-spacing: 3px; color: #f0dcae; font-weight: normal;
+  text-shadow: 0 0 18px rgba(255,150,60,.3);
+}
+#lore-body { color: #cbbd9a; }
+#lore-close-btn {
+  margin-top: 22px; min-width: 170px; min-height: 48px;
+  font-family: inherit; font-size: 14px; letter-spacing: 3px; cursor: pointer;
+  color: #f0dcae; background: #2a1e12; border: 1px solid #7a5a34;
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+}
+#lore-close-btn:active { background: #3a2a18; }
+#lore-x {
+  position: absolute; top: 6px; right: 10px; width: 44px; height: 44px;
+  font-size: 28px; line-height: 1; cursor: pointer; color: #7a5a34;
+  background: none; border: none; touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent; z-index: 2;
+}
+#lore-x:active { color: #f0dcae; }
+
 /* ---------------- fade / boot ---------------- */
 #fade { position: fixed; inset: 0; background: #000; z-index: 90; opacity: 1; pointer-events: none; transition: opacity 2.2s ease; }
 #fade.clear { opacity: 0; }

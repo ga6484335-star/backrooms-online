@@ -5,6 +5,8 @@ import { WorldModel } from '../client/js/worldgen.js';
 import {
   OBJECTIVE_PLANS, planFor, siteGoal, siteCells, siteCenter, siteKey,
   objectiveSites, exitCellFor, ObjectiveTracker,
+  CACHE_PLANS, cachePlanFor, cacheCellFor, anyCacheCellFor, cacheKey,
+  loreCacheFor, loreFor, LORE, LORE_TRUTH, cacheHintFor, CACHE_HINTS,
 } from '../client/js/objectives.js';
 import {
   STORY, ENDING, LEVEL_ORDER, FINAL_LEVEL, storyFor, introFor, epilogueFor,
@@ -162,7 +164,6 @@ for (const lv of LEVELS) {
   check((pre.lines || []).length >= 1, `preroll ${lv}: has lines`);
 }
 
-// ---------------------------------------------------------------------------
 console.log('\nending script');
 check(ENDING.stages.length >= 6, 'ending has multiple stages');
 let ordered = true;
@@ -177,5 +178,47 @@ check(keys.indexOf('reveal') > keys.indexOf('others') || keys.indexOf('reveal') 
 check(ENDING.tail.length >= 1, 'ending has tail lines');
 // the twist (the REC light surviving) must be signposted
 check(ENDING.stages.some((s) => /REC/i.test(s.card)), 'ending signposts the surviving REC light');
+
+// ---------------------------------------------------------------------------
+console.log('\nhidden lore caches');
+{
+  for (const lv of LEVELS) {
+    const plan = cachePlanFor(lv);
+    check(!!plan && typeof plan.label === 'string' && plan.label.length > 0, `level ${lv}: cache has a label`);
+    const lore = loreFor(lv);
+    check(!!lore && !!lore.title && !!lore.body, `level ${lv}: lore has a title + body`);
+    const hint = cacheHintFor(lv);
+    check(typeof hint === 'string' && hint.length > 0, `level ${lv}: cache has a hint`);
+    check(lore !== loreFor((lv + 1) % 7) || lv === 6, `level ${lv}: lore is level-specific`);
+  }
+  check(Object.keys(LORE).length === 7, 'one distinct lore fragment per level');
+  check(typeof LORE_TRUTH === 'string' && LORE_TRUTH.length > 20, 'a shared truth fragment exists');
+  check(Object.keys(CACHE_HINTS).length === 7, 'one hint per level');
+
+  // deterministic placement per (seed, level); seed-dependent across seeds
+  for (const lv of LEVELS) {
+    const w1 = new WorldModel(1234, lv);
+    const c1 = loreCacheFor(w1, lv);
+    const c2 = loreCacheFor(new WorldModel(1234, lv), lv);
+    check(c1.key === c2.key && c1.cx === c2.cx && c1.cz === c2.cz,
+      `level ${lv}: cache placement is deterministic`);
+    check(c1.key === cacheKey(lv, c1.cx, c1.cz), `level ${lv}: cache key matches its cell`);
+    // the memo must not leak across seeds
+    const c3 = loreCacheFor(new WorldModel(9876, lv), lv);
+    check(c3.key.startsWith(`cache:${lv}:`), `level ${lv}: cache key is level-namespaced`);
+  }
+  // at least one seed/level should differ across seeds (sanity: not constant)
+  let differs = false;
+  for (const lv of LEVELS) {
+    if (loreCacheFor(new WorldModel(1, lv), lv).key !== loreCacheFor(new WorldModel(2, lv), lv).key) differs = true;
+  }
+  check(differs, 'cache placement varies with the world seed');
+
+  // the cache should sit inside a real special room when one exists
+  const w = new WorldModel(555, 0);
+  const c = loreCacheFor(w, 0);
+  if (c.room) check(!!w.specialAt(c.cx, c.cz), `cache sits inside its generated special room (${c.room})`);
+  else check(true, 'cache fell back to a highway cell (no planned room in range)');
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);

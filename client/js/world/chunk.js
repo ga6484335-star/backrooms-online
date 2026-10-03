@@ -8,7 +8,7 @@ import { GeoBuilder, PROP_BUILDERS } from '../props.js';
 import { hashStr, rngFrom, chance, range, intRange } from '../rng.js';
 import { getLevel } from '../levels.js';
 import { materialsFor } from '../materials.js';
-import { objectiveSites, exitCellFor } from '../objectives.js';
+import { objectiveSites, exitCellFor, loreCacheFor } from '../objectives.js';
 
 // door leaf materials (cached per level): aged painted wood / metal handle
 const doorMatCache = new Map();
@@ -378,6 +378,18 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
       buildExitGate(gb, gbEmiss, ex, ez, world.cellAt(ecx, ecz).ceilH);
       interactables.push({ kind: 'exit', key: `exit:${level}`, cx: ecx, cz: ecz, x: ex, z: ez });
     }
+    // the hidden lore cache for this level (inside a special room, off-path)
+    const cache = loreCacheFor(world, level);
+    if (Math.floor(cache.cx / CELLS_PER_CHUNK) === chunkX && Math.floor(cache.cz / CELLS_PER_CHUNK) === chunkZ) {
+      buildLoreCache(gb, gbEmiss, cache);
+      colliders.push({ x: cache.x, z: cache.z, r: 0.6 });
+      interactables.push({ kind: 'cache', key: cache.key, label: cache.label,
+        cx: cache.cx, cz: cache.cz, x: cache.x, z: cache.z, lore: cache.lore });
+      // a dim, wrong-coloured pool so the room reads as "not part of the level"
+      lights.push({ cx: cache.cx, cz: cache.cz, x: cache.x, z: cache.z, y: 2.4,
+        color: 0xff9a4a, intensity: 6, distance: 7,
+        flickerSeed: hashStr(seed, `cachelight:${level}:${cache.cx},${cache.cz}`), special: null });
+    }
     // fixture that lets the exit read as a lit doorway
     const exSite = interactables.find((it) => it.kind === 'exit');
     if (exSite) {
@@ -410,6 +422,25 @@ function buildObjectiveSite(gb, gbEmiss, site, level) {
   // cue. Two nested boxes so it reads as volumemetric-ish through fog.
   gbEmiss.box(0.22, 5.4, 0.22, x, 2.1, z, [150, 205, 255]);
   gbEmiss.box(0.5, 0.16, 0.5, x, 4.75, z, [210, 235, 255]);
+}
+
+// The hidden cache: a small archive case — a dark cabinet with a single drawer
+// pulled open and a cold reading lamp, plus a spill of tape reels. Deliberately
+// unlike the objective nodes so a player who stumbles on it knows it is a
+// secret, not a goal.
+function buildLoreCache(gb, gbEmiss, cache) {
+  const x = (cache.cx + 0.5) * CELL, z = (cache.cz + 0.5) * CELL;
+  const b = makeShiftBuilder(gb, x, z, 0.4);
+  b.box(0.5, 0.95, 0.4, 0, 0.0, 0, [22, 20, 24]);      // cabinet base
+  b.box(0.54, 0.06, 0.44, 0, 0.98, 0, [40, 36, 40]);   // top
+  // drawer slid open toward the viewer
+  b.box(0.46, 0.12, 0.3, 0, 0.62, 0.18, [30, 27, 30]);
+  b.box(0.4, 0.02, 0.24, 0, 0.68, 0.18, [120, 108, 84]); // papers inside
+  // a few loose reels on the top
+  b.cylinder(0.13, 0.06, -0.12, 1.03, 0.02, [150, 44, 40]);
+  b.cylinder(0.13, 0.06, 0.14, 1.03, -0.06, [46, 120, 140]);
+  // cold reading lamp — a small emissive panel above the drawer
+  gbEmiss.box(0.3, 0.03, 0.03, x, 1.35, z, [210, 230, 255]);
 }
 
 // The exit: a standing archive doorframe with a cold bright mouth. Locked until
