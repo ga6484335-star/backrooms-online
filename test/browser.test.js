@@ -377,6 +377,8 @@ async function main() {
       'flashlight has a wider spill halo around the beam');
     check(lighting && lighting.cone && lighting.cone.decay === 2,
       'flashlight uses physical (inverse-square) falloff');
+    check(lighting && lighting.cone && lighting.cone.beamMesh === false,
+      'flashlight is pure light — no translucent cone/overlay mesh');
 
     // console errors? (filter out expected WebGL-unavailable noise when headless
     // has no GL — the app surviving is the actual assertion)

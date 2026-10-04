@@ -146,6 +146,7 @@ async function main() {
   check(c && c.intensity > 0, 'flashlight carries natural intensity');
   check(c && c.map === true && c.cookie > 0, 'flashlight projects a shaped beam cookie, not a flat disc');
   check(c && c.spillIntensity > 0 && c.spillIntensity < c.intensity * 0.5, 'spill halo is dimmer than the core');
+  check(c && c.beamMesh === false, 'flashlight is pure light — no translucent cone/overlay mesh');
 
   // held-light aim lag: a sustained turn must leave the beam trailing behind,
   // but only by a small, felt amount (never enough to hurt aiming)

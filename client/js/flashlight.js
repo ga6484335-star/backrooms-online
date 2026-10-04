@@ -1,17 +1,20 @@
 // Handheld flashlight — a physically-shaped, hand-held light.
 //
-// Instead of one flat spotlight cone, the beam is built from three cooperating
-// pieces, all sharing a slightly lagged "hand" transform:
-//   1. a narrow spot carrying a *cookie* (gobo) texture, so the projected light
-//      is a hot centre that falls off softly to a dark rim — never a flat disc;
-//   2. a wider, dim spill spot for the faint throw-light a real reflector leaks,
-//      with its own soft cookie, so surfaces outside the core still respond a
-//      little while the room stays genuinely dark;
-//   3. a tiny point fill at the lens so the player's own feet/held items are not
-//      pitch black.
-// The spot casts a real dynamic shadow map on high/ultra, so doorframes, walls
-// and props carve believable shadows out of the beam (the main anti-"flat cone"
-// cue). True inverse-square falloff (decay 2) keeps distance honest.
+// The beam is REAL LIGHT, not a graphic: there is no volumetric cone mesh and
+// no translucent overlay in front of the camera. Everything the player sees is
+// the world being lit by three cooperating lights that share a slightly lagged
+// "hand" transform:
+//   1. a narrow primary SpotLight with a *cookie* (gobo) that shapes the spot
+//      into a hot centre falling off softly to a dark rim;
+//   2. a wider, dim spill SpotLight (with its own soft cookie) for the faint
+//      throw-light a real reflector leaks, so surfaces just outside the core
+//      still respond a little while the room stays genuinely dark;
+//   3. a tiny point fill at the lens so the player's own feet/held items are
+//      not pitch black.
+// The primary spot casts a real dynamic shadow map on high/ultra, so doorframes,
+// walls and props carve believable shadows out of the beam — the strongest cue
+// that the light is real. True inverse-square falloff (decay 2) keeps distance
+// honest: strong up close, quickly weaker with distance.
 //
 // The rig itself is a damped spring: the light mount and its aim trail the
 // camera by a few dozen milliseconds, with a figure-8 walk bob, idle breathing,
@@ -27,6 +30,11 @@ const BATTERY_REFILL = 55;
 const AIM_TAU = 0.055;
 const AIM_TAU_V = 0.078;
 const POS_TAU = 0.05;
+
+// base intensities (candela). Physical falloff does the distance work.
+const SPOT_BASE = 430;
+const SPILL_BASE = 22;
+const FILL_BASE = 0.30;
 
 // ---------------------------------------------------------------------------
 // Cookie (gobo) textures. One tight beam profile, one broad soft spill. Drawn
@@ -76,18 +84,19 @@ function beamCookie() {
   if (!_beamCookie) {
     // hot core → long soft shoulder → dim halo → dark rim
     _beamCookie = makeCookie(256, [
-      [0.00, 1.00], [0.15, 0.99], [0.30, 0.80], [0.44, 0.52],
-      [0.60, 0.24], [0.78, 0.075], [0.92, 0.015], [1.00, 0.0],
-    ], 0.045, 0.018);
+      [0.00, 1.00], [0.16, 0.99], [0.32, 0.82], [0.46, 0.55],
+      [0.62, 0.26], [0.78, 0.085], [0.92, 0.02], [1.00, 0.0],
+    ], 0.05, 0.02);
   }
   return _beamCookie;
 }
 
 function spillCookie() {
   if (!_spillCookie) {
-    // very soft, low-contrast wash for the reflector's leaked light
+    // very soft, low-contrast wash for the reflector's leaked light. The outer
+    // stop must reach 0 so the spill has NO hard cone edge either.
     _spillCookie = makeCookie(128, [
-      [0.00, 0.85], [0.35, 0.55], [0.65, 0.22], [0.85, 0.06], [1.00, 0.0],
+      [0.00, 0.9], [0.30, 0.6], [0.55, 0.3], [0.78, 0.10], [0.92, 0.02], [1.00, 0.0],
     ], 0.03, 0.03);
   }
   return _spillCookie;
@@ -106,81 +115,30 @@ export class Flashlight {
     this.time = 0;
     this.quality = quality;
     this.castShadows = quality === 'high' || quality === 'ultra';
+    // mobile/low keeps exactly ONE light (the primary spot). The spill + lens
+    // fill are only added back on medium and above, where the extra per-fragment
+    // cost is affordable.
+    this.useSpill = quality !== 'low';
+    this.useFill = quality === 'high' || quality === 'ultra';
 
     // --- primary beam: narrow, physical falloff, soft edge, cookie-shaped ---
-    this.spot = new THREE.SpotLight(0xfff0d0, 0, 80, 0.17, 0.8, 2.0);
+    this.spot = new THREE.SpotLight(0xfff0d0, 0, 85, 0.17, 0.85, 2.0);
     this.spot.visible = false;
     this.spot.map = beamCookie();
     this.spot.castShadow = this.castShadows;
-    if (this.castShadows) {
-      this.spot.shadow.mapSize.set(1024, 1024);
-      this.spot.shadow.camera.near = 0.22;
-      this.spot.shadow.camera.far = 80;
-      this.spot.shadow.focus = 1.0;
-      this.spot.shadow.bias = -0.0014;
-      this.spot.shadow.normalBias = 0.03;
-      this.spot.shadow.radius = 2.4; // PCF soft-shadow penumbra
-    }
-    scene.add(this.spot);
-    scene.add(this.spot.target);
+    if (this.castShadows) this._configureShadow();
 
     // --- spill halo: wider + dimmer, its own soft cookie. Kept weak so the
     //     darkness outside the beam stays dark. ---
-    this.spill = new THREE.SpotLight(0xffe4b8, 0, 26, 0.52, 0.95, 2.0);
+    this.spill = new THREE.SpotLight(0xffe4b8, 0, 30, 0.55, 0.95, 2.0);
     this.spill.visible = false;
     this.spill.map = spillCookie();
-    scene.add(this.spill);
-    scene.add(this.spill.target);
 
     // faint, short fill at the lens so held items/feet are not pitch black
-    this.fill = new THREE.PointLight(0xffe9c0, 0, 2.0, 2);
+    this.fill = new THREE.PointLight(0xffe9c0, 0, 2.2, 2);
     this.fill.visible = false;
-    scene.add(this.fill);
 
-    // volumetric beam: translucent shaft with a length + edge gradient and a
-    // faint scrolling shimmer, so it reads as light in air, not a solid cone.
-    const beamGeo = new THREE.CylinderGeometry(0.02, 1.05, 9.0, 22, 1, true);
-    beamGeo.translate(0, -4.5, 0);
-    beamGeo.rotateX(-Math.PI / 2);
-    const beamMat = new THREE.ShaderMaterial({
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      fog: false,
-      uniforms: {
-        uColor: { value: new THREE.Color(0xfff0d0) },
-        uOpacity: { value: 0.0 },
-        uTime: { value: 0.0 },
-      },
-      vertexShader: /* glsl */`
-        varying vec2 vUv;
-        void main() {
-          vUv = uv;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: /* glsl */`
-        uniform vec3 uColor;
-        uniform float uOpacity;
-        uniform float uTime;
-        varying vec2 vUv;
-        void main() {
-          // fade along the length (brightest near the lens) and toward the edge
-          float len = clamp(vUv.y, 0.0, 1.0);
-          float along = pow(len, 2.2);
-          float edge = smoothstep(0.0, 0.55, 1.0 - abs(vUv.x - 0.5) * 2.0);
-          // slow vertical shimmer: motes drifting through the shaft
-          float shimmer = 0.85 + 0.15 * sin(vUv.y * 26.0 - uTime * 1.7 + vUv.x * 5.0);
-          float a = uOpacity * along * mix(0.12, 1.0, edge) * shimmer;
-          gl_FragColor = vec4(uColor, a);
-        }
-      `,
-    });
-    this.beam = new THREE.Mesh(beamGeo, beamMat);
-    this.beam.visible = false;
-    this.beam.renderOrder = 999;
-    scene.add(this.beam);
+    scene.add(this.spot, this.spot.target, this.spill, this.spill.target, this.fill);
 
     // held-light state
     this._aim = new THREE.Vector3(0, 0, -1);
@@ -196,6 +154,16 @@ export class Flashlight {
     this._vibT = 0;
     this._rattleCd = 0;
     this._lastSpeed01 = 0;
+  }
+
+  _configureShadow() {
+    this.spot.shadow.mapSize.set(1024, 1024);
+    this.spot.shadow.camera.near = 0.22;
+    this.spot.shadow.camera.far = 85;
+    this.spot.shadow.focus = 1.0;
+    this.spot.shadow.bias = -0.0014;
+    this.spot.shadow.normalBias = 0.03;
+    this.spot.shadow.radius = 2.4; // PCF soft-shadow penumbra
   }
 
   toggle() {
@@ -235,16 +203,12 @@ export class Flashlight {
     if (q === this.quality) return;
     this.quality = q;
     const shadows = q === 'high' || q === 'ultra';
-    if (shadows) {
-      this.spot.shadow.mapSize.set(1024, 1024);
-      this.spot.shadow.camera.near = 0.22;
-      this.spot.shadow.camera.far = 80;
-      this.spot.shadow.bias = -0.0014;
-      this.spot.shadow.normalBias = 0.03;
-      this.spot.shadow.radius = 2.4;
-    }
+    if (shadows) this._configureShadow();
     this.spot.castShadow = shadows;
     this.castShadows = shadows;
+    this.useSpill = q !== 'low';
+    this.useFill = shadows;
+    this._apply();
   }
 
   // snap the held light back to the camera with no lag — used on respawn / level
@@ -261,26 +225,17 @@ export class Flashlight {
 
   _apply() {
     this.spot.visible = this.on;
-    this.spill.visible = this.on;
-    this.fill.visible = this.on;
-    this.beam.visible = this.on;
+    this.spill.visible = this.on && this.useSpill;
+    this.fill.visible = this.on && this.useFill;
     // give the light a live base the instant it switches on, before the next
     // update() refines it with wobble/flicker (matters for that first frame)
-    this.spot.intensity = this.on ? 380 : 0;
-    this.spill.intensity = this.on ? 26 : 0;
-    this.fill.intensity = this.on ? 0.35 : 0;
-    this.beam.material.uniforms.uOpacity.value = this.on ? 0.022 : 0;
+    this.spot.intensity = this.on ? SPOT_BASE : 0;
+    this.spill.intensity = this.spill.visible ? SPILL_BASE : 0;
+    this.fill.intensity = this.fill.visible ? FILL_BASE : 0;
   }
 
   dispose(scene) {
-    scene.remove(this.spot);
-    scene.remove(this.spot.target);
-    scene.remove(this.spill);
-    scene.remove(this.spill.target);
-    scene.remove(this.fill);
-    scene.remove(this.beam);
-    this.beam.geometry.dispose();
-    this.beam.material.dispose();
+    scene.remove(this.spot, this.spot.target, this.spill, this.spill.target, this.fill);
     if (this.audio && this.audio.flashlightHum) this.audio.flashlightHum(false);
   }
 
@@ -363,15 +318,13 @@ export class Flashlight {
     this._aim.z += (tz - this._aim.z) * kaxz;
     this._aim.normalize();
 
-    // ---- drive the three lights + the beam mesh --------------------------
+    // ---- drive the lights: all originate at the hand, aimed down the beam --
     const tgtX = hx + this._aim.x * 24, tgtY = hy + this._aim.y * 24, tgtZ = hz + this._aim.z * 24;
     this.spot.position.set(hx, hy, hz);
     this.spot.target.position.set(tgtX, tgtY, tgtZ);
     this.spill.position.set(hx, hy, hz);
     this.spill.target.position.set(tgtX, tgtY, tgtZ);
     this.fill.position.set(p.x, p.y - 0.06, p.z);
-    this.beam.position.set(hx, hy, hz);
-    this.beam.lookAt(tgtX, tgtY, tgtZ);
 
     // ---- brightness: voltage wobble, drain curve, low-battery flicker ----
     const b01 = this.battery / 100;
@@ -391,11 +344,9 @@ export class Flashlight {
         f *= 0.35 + (1 - panic) * 0.5;
       }
     }
-    this.spot.intensity = 380 * f;
-    this.spill.intensity = 26 * f;
-    this.fill.intensity = 0.35 * f;
-    this.beam.material.uniforms.uOpacity.value = 0.022 * f;
-    this.beam.material.uniforms.uTime.value = this.time;
+    this.spot.intensity = SPOT_BASE * f;
+    this.spill.intensity = this.useSpill ? SPILL_BASE * f : 0;
+    this.fill.intensity = this.useFill ? FILL_BASE * f : 0;
 
     // ---- hand-motion rattle: the light taps against the grip when turning --
     const dot = Math.max(-1, Math.min(1,

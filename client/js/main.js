@@ -2306,6 +2306,18 @@ window.__dbg = {
     map: !!flash.spot.map,
     cookie: flash.spot.map ? (flash.spot.map.image ? flash.spot.map.image.width : 0) : 0,
     shadows: !!flash.spot.castShadow,
+    // guard against the old translucent cone overlay creeping back: the
+    // flashlight must not own any mesh at all (only lights). Must be false.
+    beamMesh: !!flash.beam,
+    // extra info: how many additive/transparent meshes exist anywhere in the
+    // scene (should be unrelated effects, never a screen-filling beam cone)
+    sceneAdditive: (() => {
+      let n = 0;
+      scene.traverse((o) => {
+        if (o.isMesh && o.material && o.material.transparent && o.material.blending === THREE.AdditiveBlending) n++;
+      });
+      return n;
+    })(),
     hand: [flash._hand.x, flash._hand.y, flash._hand.z],
     mount: [flash._mount.x, flash._mount.y, flash._mount.z],
     aim: [flash._aim.x, flash._aim.y, flash._aim.z],
