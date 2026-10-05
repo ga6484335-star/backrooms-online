@@ -286,19 +286,26 @@ async function main() {
     await sleep(300);
     const standing = await cdp.eval(`window.__dbg.state().sitting === false`);
     check(standing === true, 'sit toggles back to standing');
-    // sit again then auto-stand by walking
+    // sit again then auto-stand by walking. rAF is throttled headless, so force
+    // update frames rather than trusting a 400ms wall-clock window — otherwise
+    // the player stays seated and the jump check below fails as a side effect.
     await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyC'}))`);
     await sleep(200);
     await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyW'}))`);
-    await sleep(400);
+    let autoStand = false;
+    for (let i = 0; i < 20; i++) {
+      await cdp.eval(`window.__dbg.step(0.05)`);
+      if (await cdp.eval(`window.__dbg.state().sitting === false`)) { autoStand = true; break; }
+    }
     await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keyup', {code:'KeyW'}))`);
-    const autoStand = await cdp.eval(`window.__dbg.state().sitting === false`);
     check(autoStand === true, 'walking auto-stands from sit');
 
     // 12. JUMP: grounded → airborne → lands; Space mid-air must NOT double height
     // Physics is stepped deterministically (rAF/fixed-timestep integration is
     // unreliable in headless, which previously made this assertion flaky).
     const jumpTest = await cdp.eval(`(() => {
+      // settle first: auto-standing from sit can leave the player mid-settle
+      for (let i = 0; i < 20 && !window.__dbg.state().grounded; i++) window.__dbg.step(0.02);
       const s0 = window.__dbg.state();
       if (!s0.grounded) return { ok: false, why: 'not grounded at start' };
       window.dispatchEvent(new KeyboardEvent('keydown', {code:'Space'}));
