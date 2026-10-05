@@ -125,7 +125,12 @@ export class RendererEngine {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
-    this.renderer.shadowMap.enabled = false; // point light shadows are too expensive; we fake AO via baked tints
+    // Dynamic shadow maps are ON so the flashlight can carve real shadows out
+    // of the beam (doorframes, props). Only the flashlight spot casts; the rest
+    // of the world stays unlit, so the cost is one 1024² map at high/ultra and
+    // nothing at low (the spot stops casting there).
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(72, 1, 0.08, 220);
@@ -134,7 +139,10 @@ export class RendererEngine {
     this.renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(this.renderPass);
 
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.35, 0.6, 0.82);
+    // Bloom is kept only for genuine light sources (ceiling panels, sparks).
+    // Strength/radius are deliberately low and the threshold high, so an
+    // ordinary lit wall or the flashlight hotspot does NOT smear into a glow.
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.10, 0.3, 0.95);
     this.composer.addPass(this.bloom);
 
     this.vhs = new ShaderPass(VHSShader);
@@ -160,7 +168,7 @@ export class RendererEngine {
     const scale = { low: 0.5, medium: 0.7, high: Math.min(dpr, 1.6), ultra: Math.min(dpr, 2) }[q];
     this.renderer.setPixelRatio(scale);
     this.bloom.enabled = q !== 'low';
-    this.bloom.strength = q === 'ultra' ? 0.45 : 0.3;
+    this.bloom.strength = q === 'ultra' ? 0.16 : 0.10;
     this.resize();
   }
 

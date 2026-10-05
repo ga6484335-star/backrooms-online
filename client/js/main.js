@@ -21,9 +21,13 @@ import { MenuUI } from './menu.js';
 import { Flashlight } from './flashlight.js';
 import { noteText } from './notes.js';
 import { getLevel } from './levels.js';
-import { ObjectiveTracker, objectiveSites, exitCellFor } from './objectives.js';
-import { introFor, epilogueFor, beatFor, ambientFor, nextStoryLevel, isFinalLevel, levelTitle } from './story.js';
+import { materialsFor } from './materials.js';
+import { ObjectiveTracker, objectiveSites, exitCellFor, loreCacheFor, cacheHintFor, hazardFor, hazardCells, hazardPhase, hazardDps, lootKindFor, puzzleSites, puzzleGoal, puzzleFor } from './objectives.js';
+import { introFor, epilogueFor, beatFor, ambientFor, radioFor, nextStoryLevel, isFinalLevel, levelTitle, ENDING, newJournalRecord, recordJournal, journalEntriesFor } from './story.js';
 import { EndingSequence } from './ending.js';
+import { OpeningSequence } from './opening.js';
+import { TransitionSequence } from './transitions.js';
+import { VoiceEngine } from './voice.js';
 import { rngFrom, hashStr } from './rng.js';
 
 // ---------------------------------------------------------------------------
@@ -32,7 +36,11 @@ const canvas = document.getElementById('gl');
 const engine = new RendererEngine(canvas);
 const scene = engine.scene;
 const camera = engine.camera;
+// the camera is a scene node so camera-attached effects (transition sheets,
+// fall streaks, flashes) render — three.js ignores cameras as draw objects
+scene.add(camera);
 const audio = new AudioEngine();
+const voice = new VoiceEngine(audio);
 const net = new Network();
 
 const player = new PlayerController(camera);
@@ -52,6 +60,9 @@ let startTime = 0;
 let doorToggles = new Map(); // "cx,cz,dir" -> boolean (net-synced; render state applied on chunk load)
 let keyInventory = new Set(); // held rusty keys
 let noteOverlayOpen = false;
+let loreOverlayOpen = false;
+let journalOverlayOpen = false;   // CASE FILE journal is open (pauses prompt/etc)
+let journal = newJournalRecord(); // local, deterministic story record (never networked)
 let flash = null;
 let dead = false;           // local player death state
 let respawnT = 0;           // seconds until respawn allowed
@@ -63,6 +74,29 @@ let objectives = null;      // ObjectiveTracker for the current level
 let exitUnlocked = false;   // gate opened (all objectives done)
 let ending = null;          // EndingSequence while the finale plays
 let cinematic = null;       // {lines, i, t, glyph, onDone} typewriter overlay
+let opening = null;         // OpeningSequence cold-open (before the Backrooms)
+let openingDone = false;    // cold-open has run (or was skipped) this session
+let transition = null;      // TransitionSequence entering a new level
+let objHudAcc = 0;          // objective HUD refresh accumulator
+let lastCompass = 0;        // objective compass refresh accumulator
+let ambientStoryIdx = 0;    // rotating ambient story pool index
+let radioIdx = 0;           // rotating radio line index
+let cachesFound = new Set(); // lore cache keys the party has opened (relayed)
+let cacheHintShown = new Set(); // levels whose hidden-room clue has been teased
+let hazardCellsSet = new Set(); // "cx,cz" hazard cells for the current level
+let exposure = 0;               // standing hazard exposure (0..1) -> drains
+let hazardState = { active: false, warn: false, inside: false, label: null };
+let lootTaken = 0;              // loot items recovered this run (HUD/debug)
+let lootTakenKeys = new Set();  // loot interactable ids already taken (relayed)
+let inventory = { flare: 0 };   // consumable items the local player is carrying
+let flares = [];                // active flares: { group, light, t, x, z, pid, key }
+
+// ---- level hazard helper: the shared blackout material for level 5 --------
+function panelMaterial() {
+  if (!world) return null;
+  const mats = materialsFor(getLevel(world.level), world.seed, 1);
+  return mats.lightPanel || null;
+}
 
 // ---------------------------------------------------------------------------
 // reconnection state
@@ -115,14 +149,16 @@ function loadSettings() {
       sens: s.sens || 1,
       volume: s.volume !== undefined ? s.volume : 0.8,
       vhs: s.vhs !== undefined ? !!s.vhs : true,
+      voice: s.voice !== undefined ? !!s.voice : true,
     };
   } catch (e) {
-    settings = { quality: defaultQuality(), sens: 1, volume: 0.8, vhs: true };
+    settings = { quality: defaultQuality(), sens: 1, volume: 0.8, vhs: true, voice: true };
   }
   E('set-quality').value = settings.quality;
   E('set-sens').value = settings.sens;
   E('set-volume').value = settings.volume;
   E('set-vhs').value = settings.vhs ? '1' : '0';
+  E('set-voice').value = settings.voice ? '1' : '0';
   applySettings(settings);
 }
 
@@ -132,8 +168,10 @@ function applySettings(s) {
   engine.setVHS(s.vhs);
   player.sensitivity = s.sens;
   audio.setVolume(s.volume);
+  voice.setEnabled(s.voice);
   if (worldMgr) worldMgr.setQuality(s.quality);
   if (lightMgr) lightMgr.setQuality(s.quality);
+  if (flash) flash.setQuality(s.quality);
 }
 
 // ---------------------------------------------------------------------------
@@ -141,10 +179,11 @@ function applySettings(s) {
 const menu = new MenuUI({
   create(name) { connectThen(() => net.createRoom(name)); },
   join(code, name) { connectThen(() => net.joinRoom(code, name)); },
-  start(level) { net.startGame(level); },
+  start(level) { requestStart(level); },
   leave() { leaveToMenu(); },
   applySettings,
   resume() { togglePause(false); E('settings-panel').classList.add('hidden'); },
+  journal() { togglePause(false); E('pause-overlay').classList.add('hidden'); E('settings-panel').classList.add('hidden'); openJournal(); },
   quit() { togglePause(false); leaveToMenu(); },
 });
 
@@ -156,6 +195,21 @@ async function connectThen(fn) {
   } catch (e) {
     menu.setStatus('CONNECTION FAILED — RETRY');
   }
+}
+
+// Start is host-only and a single dropped packet must not strand the lobby.
+// Resend once if the world has not spun up shortly after the first request —
+// never leaving the player on a black screen. Both sends are idempotent on the
+// server (the room is already 'playing') and the client 'start' handler guards
+// against re-entry, so at most one world is ever built.
+let startWatchdog = 0;
+function requestStart(level) {
+  net.startGame(level);
+  clearTimeout(startWatchdog);
+  startWatchdog = setTimeout(() => {
+    if (gameState === 'lobby') { net.startGame(level); } // retry once
+    else if (gameState === 'playing' && world) E('fade').classList.add('clear');
+  }, 2500);
 }
 
 // ---------------------------------------------------------------------------
@@ -176,8 +230,8 @@ net.on('room', (m) => {
   window.__seed = m.seed; // debug hook for tests
   if (m.rejoin && gameState === 'playing') { resumeFromRejoin(m); return; }
   if (m.state === 'playing') {
-    // joined (or page-refreshed) into a game already in progress
-    startGame(m.seed, m.level);
+    // joined (or page-refreshed) into a game already in progress — no cold open
+    startGame(m.seed, m.level, { midJoin: true });
     applyWorldReplay(m);
     return;
   }
@@ -206,6 +260,7 @@ net.on('host', (m) => {
   menu.updateLobby({ ...net.room, players: [...net.players.values()], meId: net.id });
 });
 net.on('start', (m) => {
+  if (gameState === 'playing' && world && world.level === m.level) return; // idempotent: a duplicate start must not re-enter
   startGame(m.seed, m.level);
   // peers inherit doors the host (or earlier players) already toggled
   for (const [k, v] of Object.entries(m.doorStates || {})) {
@@ -265,8 +320,46 @@ net.on('ev', (m) => {
       }
       break;
     }
+    case 'puzzle': {
+      // a peer collected a puzzle key — remove it here too and re-check the lock
+      if (!objectives || !m.data || !m.data.key) break;
+      if (objectives.collectPuzzle(m.data.key)) {
+        if (worldMgr) worldMgr.removeInteractable(m.data.key);
+        onPuzzleCollected({}, true);
+      }
+      break;
+    }
     case 'ending': {
       if (!ending) startEnding();
+      break;
+    }
+    case 'cache': {
+      // a peer found a hidden lore cache — mark it found so late opens don't
+      // re-reward, and surface a quiet shared notification (not the text itself,
+      // which each player reads in their own overlay if they go there).
+      if (m.data && m.data.key) {
+        const first = !cachesFound.has(m.data.key);
+        cachesFound.add(m.data.key);
+        if (first && m.data.pid !== net.id) flashText('SOMEONE FOUND SOMETHING IN THE DARK.');
+      }
+      break;
+    }
+    case 'loot': {
+      // a peer took a hazard-cell pickup — remove it here too so the co-op
+      // party cannot double-collect the same risk/reward item
+      if (m.data && m.data.id && !lootTakenKeys.has(m.data.id)) {
+        lootTakenKeys.add(m.data.id);
+        if (worldMgr) worldMgr.removeInteractable(m.data.id);
+        if (m.data.kind === 'recorder') flashText('SOMEONE PICKED UP A RECORDER.');
+      }
+      break;
+    }
+    case 'flare': {
+      // a teammate lit a flare — everyone sees the light (and the attention)
+      if (m.data && Number.isFinite(m.data.x) && Number.isFinite(m.data.z)) {
+        dropFlare(true, m.data.pid ?? m.from, m.data.x, m.data.z, m.data.key);
+        flashText(`${net.players.get(m.from)?.name || 'SOMEONE'} LIT A FLARE.`);
+      }
       break;
     }
     case 'caught': {
@@ -423,9 +516,24 @@ function applyWorldReplay(m) {
   }
   // objective activations belong to the *current* level — apply them last
   for (const ev of m.events || []) {
-    if (!ev || ev.kind !== 'obj' || !ev.data || !objectives) continue;
-    if (ev.data.kind === 'site' && ev.data.key) objectives.activateSite(ev.data.key);
-    else if (ev.data.kind === 'hold') objectives.holdT = 99999;
+    if (!ev || !ev.data) continue;
+    if (ev.kind === 'obj' && objectives) {
+      if (ev.data.kind === 'site' && ev.data.key) objectives.activateSite(ev.data.key);
+      else if (ev.data.kind === 'hold') objectives.holdT = 99999;
+    } else if (ev.kind === 'cache' && ev.data.key) {
+      // replay: mark pre-existing discoveries found so late joiners see the
+      // cache already opened rather than re-rewarding it
+      cachesFound.add(ev.data.key);
+    } else if (ev.kind === 'loot' && ev.data.id) {
+      lootTakenKeys.add(ev.data.id);
+      if (worldMgr) worldMgr.removeInteractable(ev.data.id);
+    } else if (ev.kind === 'flare' && Number.isFinite(ev.data.x) && Number.isFinite(ev.data.z)) {
+      // a flare was lit before we joined — re-light it (reserved, not deterministic)
+      spawnFlare(ev.data.pid, ev.data.x, ev.data.z, ev.data.key);
+    } else if (ev.kind === 'puzzle' && ev.data.key && objectives) {
+      objectives.collectPuzzle(ev.data.key);
+      if (worldMgr) worldMgr.removeInteractable(ev.data.key);
+    }
   }
   if (objectives && objectives.isComplete()) unlockExit();
   if (sawEnding && gameState === 'playing' && !ending) startEnding();
@@ -445,7 +553,7 @@ setInterval(() => {
 
 // ---------------------------------------------------------------------------
 // game start
-function startGame(seed, level) {
+function startGame(seed, level, opts = {}) {
   gameState = 'playing';
   menu.hideAll();
 
@@ -478,6 +586,10 @@ function startGame(seed, level) {
   respawnT = 0;
   doorToggles = new Map();
   keyInventory = new Set();
+  exposure = 0; lootTaken = 0;
+  lootTakenKeys = new Set();
+  clearFlares();
+  hazardCellsSet = new Set((hazardCells(world, level) || []).map(([cx, cz]) => `${cx},${cz}`));
 
   monsters.onNearCallback = (m, d) => {
     player.trauma(Math.max(0, 1 - d / 6) * 0.4);
@@ -545,26 +657,162 @@ function startGame(seed, level) {
     return out;
   };
 
-  // cinematic story intro for this level (once per level start)
-  showCinematic(introFor(level), 3, null);
-
-  if (player.mobile) {
-    if (!mobile) {
-      mobile = new MobileControls(player, doInteract, doEmote, togglePause);
-      mobile.onFlash = () => { if (!dead && flash) flash.toggle(); };
-      mobile.onScream = doScream;
-    }
-    mobile.show();
+  // ---- STORY MODE hand-off -------------------------------------------------
+  // A fresh session on Level 0 opens with the cold open (normal world → fall).
+  // Everything else opens with that level's own distinctive transition. Both
+  // are non-interactive but non-blocking: the world streams underneath and
+  // control returns when the sequence ends (or is skipped).
+  const skipIntro = new URLSearchParams(location.search).has('skipintro');
+  // a player joining a party already in progress should never be forced
+  // through the cold open — they drop straight into the level
+  const freshStart = (level === 0 && !openingDone && !opts.midJoin);
+  if (!skipIntro && freshStart) {
+    startOpening();
+  } else if (!skipIntro && !opts.midJoin) {
+    startTransition(level);
   } else {
-    canvas.requestPointerLock?.().catch?.(() => {});
+    openingDone = true;
+    player.enabled = true;
+    recordIntro(level);
+    showCinematic(introFor(level), 3, null);
   }
 
-  // intro fade
+  // intro fade (a short black lift; the sequences own their own reveals)
   startTime = performance.now();
-  const fade = E('fade');
-  fade.style.transition = 'opacity 3.5s ease';
-  fade.classList.add('clear');
+  clearTimeout(startWatchdog);
+  if (skipIntro) {
+    const fade = E('fade');
+    fade.style.transition = 'opacity 3.5s ease';
+    fade.classList.add('clear');
+  }
+  // safety net: however we got here, once control has actually returned to the
+  // player the found-footage overlay must never stay black. Gated on
+  // gameState==='playing' so it cannot cut a cold open / level transition /
+  // finale short — it only rescues a genuinely stuck post-start frame.
+  setTimeout(() => {
+    if (world && gameState === 'playing' && !dead && !paused) E('fade').classList.add('clear');
+  }, 6000);
   audio.distantMetal(0.4);
+}
+
+// ---- story mode: the cold open --------------------------------------------
+function startOpening() {
+  gameState = 'opening';
+  player.enabled = false;
+  if (mobile) mobile.hide();
+  E('fade').classList.add('clear');
+  const ov = E('opening-overlay');
+  ov.classList.remove('hidden');
+  E('opening-hint').classList.add('hidden');
+  E('opening-card').classList.add('hidden');
+  E('opening-line').textContent = '';
+  E('opening-speaker').textContent = '';
+  opening = new OpeningSequence(scene, camera, player, engine, audio, {
+    voice,
+    onCard(card) {
+      const el = E('opening-card');
+      if (!card) { el.classList.add('hidden'); return; }
+      el.textContent = card;
+      el.classList.remove('hidden', 'pop');
+      void el.offsetWidth;
+      el.classList.add('pop');
+    },
+    onLine(t, mood) {
+      E('opening-line').textContent = t;
+      E('opening-speaker').textContent = t ? voice.speakerFor(mood) : '';
+    },
+    onHint(show) { E('opening-hint').classList.toggle('hidden', !show); },
+    onDone() { finishOpening(); },
+  });
+}
+
+function finishOpening() {
+  if (!opening) return;
+  if (!opening.done) opening.done = true;
+  opening.dispose();
+  opening = null;
+  E('opening-overlay').classList.add('hidden');
+  E('opening-hint').classList.add('hidden');
+  E('opening-line').textContent = '';
+  E('opening-card').classList.add('hidden');
+  openingDone = true;
+  gameState = 'playing';
+  player.resetState();
+  const [sx, sz] = world.spawnPoint(0);
+  player.teleport(sx, sz);
+  worldMgr.ensure(player.pos.x, player.pos.z);
+  player.enabled = true;
+  if (player.mobile && mobile) mobile.show(); else canvas.requestPointerLock?.().catch?.(() => {});
+  // the room speaks the first beat, and a radio scrap comes through
+  setTimeout(() => { if (gameState === 'playing') { recordIntro(0); showCinematic(introFor(0), 3, null); } }, 900);
+  audio.distantMetal(0.5);
+  if (monsters) monsters.escalate(0.6); // the world notices you landed
+}
+
+function skipOpening() {
+  if (!opening) return;
+  finishOpening();
+}
+
+// ---- story mode: a level's own transition ---------------------------------
+function startTransition(level) {
+  gameState = 'transition';
+  player.enabled = false;
+  if (mobile) mobile.hide();
+  E('fade').classList.add('clear');
+  const ov = E('opening-overlay');
+  ov.classList.remove('hidden');
+  E('opening-rec').classList.add('hidden');
+  E('opening-hint').classList.add('hidden');
+  E('opening-line').textContent = '';
+  E('opening-speaker').textContent = '';
+  const cardEl = E('opening-card');
+  cardEl.classList.add('hidden');
+  transition = new TransitionSequence(scene, camera, player, engine, audio, level, {
+    voice,
+    onCard(card) {
+      if (!card) { cardEl.classList.add('hidden'); return; }
+      cardEl.textContent = card;
+      cardEl.classList.remove('hidden', 'pop');
+      void cardEl.offsetWidth;
+      cardEl.classList.add('pop');
+    },
+    onLine(t, mood) {
+      E('opening-line').textContent = t;
+      E('opening-speaker').textContent = t ? voice.speakerFor(mood) : '';
+    },
+    onHint(show) { E('opening-hint').classList.toggle('hidden', !show); },
+    onDone() { finishTransition(level); },
+  });
+}
+
+function finishTransition(level) {
+  if (!transition) return;
+  if (!transition.done) transition.done = true;
+  transition.dispose();
+  transition = null;
+  const ov = E('opening-overlay');
+  ov.classList.add('hidden');
+  E('opening-rec').classList.remove('hidden');
+  E('opening-hint').classList.add('hidden');
+  E('opening-line').textContent = '';
+  E('opening-card').classList.add('hidden');
+  gameState = 'playing';
+  player.enabled = true;
+  if (player.mobile && mobile) mobile.show(); else canvas.requestPointerLock?.().catch?.(() => {});
+  recordIntro(level);
+  showCinematic(introFor(level), 3, null);
+  if (monsters) {
+    monsters.escalate(1.0); // arrival is loud; the world reacts
+    // every level greets you with something once you are standing — a distant
+    // reveal, never a spawn in the view cone
+    if (isHost) monsters.stageEncounter(null, player.pos.x, player.pos.z);
+  }
+}
+
+function skipTransition() {
+  if (!transition) return;
+  finishTransition(transition.level);
 }
 
 function localDeath() {
@@ -577,38 +825,55 @@ function localDeath() {
   if (flash && flash.on) flash.setOn(false);
   if (monsters) monsters.notifyDeath(); // director: quiet mourning period
   net.sendEvent('died', { pid: net.id });
-  // found-footage death: glitch hard, blackout, spectator / respawn
+  // found-footage death: glitch hard, drop to black, then the death card.
   engine.bumpGlitch(3.5);
   player.trauma(1);
   audio.monsterAttack(player.pos.x, 1.5, player.pos.z);
   audio.heartbeat(1);
   const fade = E('fade');
-  fade.style.transition = 'opacity 0.12s ease';
-  fade.classList.remove('clear');
+  fade.style.transition = 'opacity 0.18s ease';
+  fade.classList.remove('clear');   // brief blackout punch…
   respawnT = 6;
+  E('btn-death-respawn').disabled = true;
   setTimeout(() => {
-    if (gameState !== 'playing') return;
-    E('death-overlay').classList.remove('hidden');
+    if (!dead || gameState !== 'playing') return;
+    // …then LIFT the blackout so the death screen is never hidden behind it.
+    // (The death overlay now sits above the fade too, but this guarantees the
+    // player is never left staring at a black screen even if z-order changes.)
+    fade.style.transition = 'opacity 0.5s ease';
+    fade.classList.add('clear');
+    const ov = E('death-overlay');
+    ov.classList.remove('hidden');
     E('death-sub').textContent = remotePlayers.players.size
       ? 'SPECTATING — [R] RESPAWN IN 6s'
       : 'RESPAWN IN 6s — [R]';
-  }, 700);
+  }, 750);
 }
 
 function respawn() {
+  if (!dead) return;
   dead = false;
   player.dead = false;
   const [sx, sz] = world.spawnPoint(0);
   player.teleport(sx, sz);
   player.resetState();
+  player.yaw = player.yawTarget = Math.random() * Math.PI * 2;
+  player.pitch = 0;
   player.enabled = !paused;
   player.trauma(0.4);
-  if (flash) flash.battery = Math.max(flash.battery, 30); // mercy charge
+  // reset the held light cleanly and hand back a mercy charge
+  if (flash) { flash.reset(); flash.battery = Math.max(flash.battery, 35); }
+  spectateIdx = 0;
   net.sendEvent('respawn', { pid: net.id });
   E('death-overlay').classList.add('hidden');
+  E('btn-death-respawn').disabled = true;
   const fade = E('fade');
-  fade.style.transition = 'opacity 2.2s ease';
+  fade.style.transition = 'opacity 1.4s ease';
   fade.classList.add('clear');
+  // re-place the camera immediately so the first live frame is not a spectate
+  // frame at the old death position
+  camera.position.set(player.pos.x, 1.62, player.pos.z);
+  camera.rotation.set(0, player.yaw, 0);
 }
 
 function levelTransition(level) {
@@ -628,6 +893,10 @@ function enterLevel(level) {
   keyInventory = new Set();
   objectives = new ObjectiveTracker(level);
   exitUnlocked = false;
+  exposure = 0; lootTaken = 0;
+  lootTakenKeys = new Set();
+  clearFlares();
+  hazardCellsSet = new Set((hazardCells(world, level) || []).map(([cx, cz]) => `${cx},${cz}`));
   monsters.director.level = level;
   const levelDef = getLevel(level);
   scene.fog = new THREE.FogExp2(levelDef.palette.fog, levelDef.palette.fogDensity);
@@ -645,7 +914,8 @@ function enterLevel(level) {
   player.teleport(sx, sz);
   worldMgr.ensure(player.pos.x, player.pos.z);
   updateObjectiveHud();
-  showCinematic(introFor(level), 3, null);
+  // each level begins its own way — a door, a lurch, a flood, a lift…
+  startTransition(level);
   flashText(levelDef.name);
 }
 
@@ -657,7 +927,11 @@ function findInteractable() {
   if (!worldMgr) return null;
   const it = worldMgr.nearestInteractable(
     player.pos.x, player.pos.z,
-    (key) => (objectives && objectives.activated.has(key)) || (key.startsWith('exit:') && !exitUnlocked),
+    (key) => (objectives && objectives.activated.has(key))
+      || (key.startsWith('cache:') && cachesFound.has(key))
+      || (key.startsWith('loot:') && lootTakenKeys.has(key))
+      || (key.startsWith('pz:') && objectives && objectives.puzzleKeys.has(key))
+      || (key.startsWith('exit:') && !exitUnlocked),
   );
   return it;
 }
@@ -671,6 +945,8 @@ function doorPromptText(d) {
 
 function doInteract() {
   if (dead) return;
+  if (journalOverlayOpen) { closeJournal(); return; }
+  if (loreOverlayOpen) { closeLore(); return; }
   if (noteOverlayOpen) { closeNote(); return; }
   const it = currentInteract;
   if (!it) return;
@@ -678,6 +954,12 @@ function doInteract() {
     openNote(it.data);
   } else if (it.type === 'site') {
     activateSite(it.data);
+  } else if (it.type === 'cache') {
+    openLoreCache(it.data);
+  } else if (it.type === 'puzzle') {
+    collectPuzzle(it.data);
+  } else if (it.type === 'loot') {
+    takeLoot(it.data);
   } else if (it.type === 'exit') {
     useExit(it.data);
   } else if (it.type === 'battery') {
@@ -720,8 +1002,8 @@ function doInteract() {
 }
 
 // ---- objective sites: force the Archivist to replay a story fragment --------
-// The room's own voice: a rotating pool of story fragments per level. Reads
-// world.level at call time so it tracks level changes automatically.
+// The room's own voice: a rotating pool of story fragments + radio scraps per
+// level. Reads world.level at call time so it tracks level changes automatically.
 let _ambIdx = 0, _ambLevel = -1;
 function wireAmbientStory() {
   if (!events) return;
@@ -730,9 +1012,16 @@ function wireAmbientStory() {
     if (!world) return null;
     const lv = world.level;
     if (lv !== _ambLevel) { _ambLevel = lv; _ambIdx = 0; }
-    const pool = ambientFor(lv, _ambIdx);
-    if (!pool.length) return null;
-    return pool[_ambIdx++ % pool.length];
+    const line = ambientFor(lv, _ambIdx++);
+    jot(lv, 'ambient', line, _ambIdx);
+    return line;
+  };
+  // and a separate pool of radio scraps, surfaced as their own event
+  events.radioLine = () => {
+    if (!world) return null;
+    const line = radioFor(world.level, radioIdx++);
+    jot(world.level, 'radio', line, radioIdx);
+    return line;
   };
 }
 
@@ -757,9 +1046,184 @@ function onSiteActivated(site, beatIdx, remote) {
     monsters.alertArea(site.x, site.z, 34);
     monsters.escalate(1);
   }
-  if (!remote) showCinematic([beatFor(world.level, beatIdx)], 2, null);
+  const beatLine = beatFor(world.level, beatIdx);
+  jot(world.level, 'beat', beatLine, beatIdx);
+  if (!remote) showCinematic([beatLine], 2, null);
+  // every so often the room leaks a clue about its hidden cache — the pull that
+  // sends a curious player off the path (delivered as ambient narration, once)
+  if (beatIdx === 1 && world && !cacheHintShown.has(world.level)) {
+    cacheHintShown.add(world.level);
+    setTimeout(() => { if (!dead && world) showCinematic([cacheHintFor(world.level)], 2, null); }, 3400);
+  }
   // if this completed every objective, open the way
   if (objectives.isComplete()) unlockExit();
+  else if (isHost && monsters && Math.random() < 0.5) {
+    // half the time, activating a node wakes something nearby — an encounter
+    // tied to the story beat rather than to a random timer
+    monsters.stageEncounter(null, site.x, site.z);
+  }
+}
+
+// ---- puzzle lock: collect a deterministic key, relay it, open the seal ------
+function collectPuzzle(pz) {
+  if (!objectives || !world || !pz || !pz.key) return;
+  if (!objectives.collectPuzzle(pz.key)) return;
+  net.sendEvent('puzzle', { key: pz.key, index: pz.index, level: world.level });
+  if (worldMgr) worldMgr.removeInteractable(pz.key);
+  onPuzzleCollected(pz, false);
+}
+
+// shared reaction (also fired when a peer collects one)
+function onPuzzleCollected(pz, remote) {
+  updateObjectiveHud();
+  const t = puzzlePlanLabel();
+  if (objectives.puzzleDone()) {
+    flashText(remote ? 'THE PARTY HAS EVERY ' + t : t + ' ALIGNED');
+    unlockExit();
+  } else {
+    const n = objectives.puzzleCount(), goal = objectives.puzzleGoalN();
+    flashText(remote ? `A PEER TURNED A KEY (${n}/${goal})` : `${t.slice(0, -1) || 'KEY'} ${n}/${goal}`);
+  }
+  audio.keyPick();
+  if (pz && pz.x !== undefined) { audio.buzz(pz.x, pz.z, 0.6); engine.bumpGlitch(0.7); }
+  if (monsters && pz && pz.x !== undefined) monsters.alertArea(pz.x, pz.z, 22);
+}
+
+function puzzlePlanLabel() {
+  try { return puzzleFor(world ? world.level : 0).label || 'LOCKS'; }
+  catch (e) { return 'LOCKS'; }
+}
+
+// ---- level hazards: per-level signature threat mechanics -------------------
+// The hazard is positional and deterministic. Each client evaluates the same
+// warning/active windows from the shared elapsed time, so a co-op party faces
+// the surge together. Damage is local (the world hurts you); monsters remain
+// host-authoritative. Level 5's blackout specially dims the shared light-panel
+// material so the whole level reads as plunged into darkness.
+function updateHazard(dt, elapsed) {
+  if (!world) return;
+  const level = world.level;
+  const hz = hazardFor(level);
+  hazardState.label = hz.label || null;
+  if (hz.kind === 'none') {
+    hazardState.active = hazardState.warn = hazardState.inside = false;
+    setHazardPanelOpacity(1);
+    return;
+  }
+  const phase = hazardPhase(world, level, elapsed);
+  const cx = Math.floor(player.pos.x / CELL), cz = Math.floor(player.pos.z / CELL);
+  const inside = hazardCellsSet.has(`${cx},${cz}`);
+
+  // avoid re-flashing the same warning every frame while standing in a cell
+  const wasWarn = hazardState.warn;
+  hazardState.active = phase.active;
+  hazardState.warn = phase.warn;
+  hazardState.inside = inside && !dead;
+
+  // UI: only warn while the player is actually near a hazard cell (or in one)
+  const near = inside || hazardCellNear(player.pos.x, player.pos.z, 4);
+  updateHazardHud(near, phase, hz);
+
+  // the floor sheets glow while the hazard is charged, pulse during the
+  // warning, and fade out between surges — same for every client (shared clock)
+  updateHazardFloors(hz, phase, dt);
+
+  // level 5 blackout: dim the shared panel material for everyone
+  if (hz.kind === 'lightsout') {
+    setHazardPanelOpacity(phase.active ? 0.08 : 1);
+  }
+
+  if (dead) { exposure = Math.max(0, exposure - dt * 0.15); return; }
+
+  if (inside && phase.active) {
+    const dps = hazardDps(level);
+    exposure = Math.min(1, exposure + dps * dt);
+    player.trauma(Math.min(1, 0.25 + exposure * 0.6));
+    addHazardOverlay(hz.kind, dt);
+    audio.hazardLoop && audio.hazardLoop(hz.kind, player.pos.x, player.pos.z);
+    if (exposure >= 1) {
+      exposure = 0;
+      flashText('THE ' + (hz.label || 'LEVEL') + ' TOOK YOU');
+      engine.bumpGlitch(2.6);
+      audio.heartbeat(1);
+      if (monsters) monsters.escalate(1);
+      localDeath();
+    }
+  } else {
+    exposure = Math.max(0, exposure - dt * 0.15);
+    clearHazardOverlay();
+  }
+  // beat the surge: if the player was warned and got clear, reward with calm
+  if (wasWarn && !inside && !phase.active && exposure === 0) {
+    hazardCalm = 0.6;
+  }
+}
+
+let hazardCalm = 0;
+let hazardOverlayT = 0;
+function addHazardOverlay(kind, dt) {
+  hazardOverlayT += dt;
+  E('hazard-overlay') && E('hazard-overlay').classList.remove('hidden');
+  const el = E('hazard-overlay');
+  if (el) el.style.opacity = String(Math.min(0.55, 0.18 + exposure * 0.5));
+}
+function clearHazardOverlay() {
+  hazardOverlayT = 0;
+  const el = E('hazard-overlay');
+  if (el) el.classList.add('hidden');
+}
+
+function setHazardPanelOpacity(v) {
+  const lp = panelMaterial();
+  if (lp && lp.opacity !== v) lp.opacity = v;
+}
+
+// glow the floor sheets under each hazard cell. Warning = slow blue/amber pulse
+// rising; active = full bright; clear = fade out.
+let hazardVisT = 0;
+let _hazardHot = null;
+function updateHazardFloors(hz, phase, dt = 1 / 60) {
+  if (!worldMgr || hz.kind === 'none') return;
+  hazardVisT += dt;
+  if (!_hazardHot) _hazardHot = new THREE.Color(0xffd9a0);
+  let target;
+  if (phase.active) target = 0.5;
+  else if (phase.warn) target = 0.14 + Math.abs(Math.sin(hazardVisT * 4)) * 0.22;
+  else target = 0;
+  const color = hz.kind === 'current' ? 0x2a6cff : 0xb04a1a;
+  for (const chunk of worldMgr.chunks.values()) {
+    const g = chunk.hazards;
+    if (!g) continue;
+    for (const q of g.children) {
+      if (!q.userData.hazard) continue;
+      const m = q.material;
+      m.opacity += (target - m.opacity) * 0.15;
+      m.color.setHex(color);
+      if (phase.active) m.color.lerp(_hazardHot, 0.18);
+    }
+  }
+}
+
+function hazardCellNear(px, pz, cells) {
+  const cx = Math.floor(px / CELL), cz = Math.floor(pz / CELL);
+  for (let dz = -cells; dz <= cells; dz++) {
+    for (let dx = -cells; dx <= cells; dx++) {
+      if (hazardCellsSet.has(`${cx + dx},${cz + dz}`)) return true;
+    }
+  }
+  return false;
+}
+
+function updateHazardHud(near, phase, hz) {
+  const box = E('hazard-hud');
+  if (!box) return;
+  if (!near || hz.kind === 'none') { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  const label = E('hazard-label');
+  const t = E('hazard-time');
+  if (label) label.textContent = hz.label || '';
+  if (phase.active) { box.classList.add('danger'); if (t) t.textContent = 'ACTIVE'; }
+  else { box.classList.remove('danger'); if (t) t.textContent = phase.warn ? `SURGE IN ${Math.ceil(phase.remain)}s` : 'CLEAR'; }
 }
 
 function unlockExit() {
@@ -770,7 +1234,221 @@ function unlockExit() {
   audio.doorSlam(player.pos.x + 4, player.pos.z);
   engine.bumpGlitch(1.4);
   audio.heartbeat(1);
-  if (monsters) monsters.escalate(2);
+  if (monsters) {
+    monsters.escalate(2);
+    // opening the way makes a sound the whole level hears — something is
+    // always waiting to see who walks through
+    if (isHost) monsters.stageEncounter(null, player.pos.x, player.pos.z);
+  }
+}
+
+// ---- hidden lore cache: an optional secret that deepens the story -----------
+// Opening it is not required to progress; it rewards the player who wanders off
+// the path with a quiet, personal reveal, and is relayed to the party so co-op
+// players share the discovery (each client renders its own local overlay).
+function openLoreCache(it) {
+  if (!it || !it.key) return;
+  const first = !cachesFound.has(it.key);
+  cachesFound.add(it.key);
+  if (first) net.sendEvent('cache', { key: it.key, level: world ? world.level : 0, pid: net.id });
+  showLore(it);
+  if (first) {
+    // finding a secret is loud to the thing that watches: a small scare beat
+    audio.keyPick();
+    audio.distantMetal(0.7);
+    engine.bumpGlitch(0.8);
+    if (monsters) { monsters.alertArea(it.x, it.z, 24); monsters.escalate(1); }
+  }
+}
+
+function showLore(it) {
+  const lore = it.lore || (world ? loreCacheFor(world, world.level).lore : null);
+  if (!lore) return;
+  const title = E('lore-title');
+  const body = E('lore-body');
+  if (title) title.textContent = lore.title || it.label || 'ARCHIVE';
+  if (body) body.textContent = lore.body || '';
+  const ov = E('lore-overlay');
+  if (ov) ov.classList.remove('hidden');
+  loreOverlayOpen = true;
+  jot(world ? world.level : 0, 'cache', `${lore.title}\n${lore.body}`, it.key || lore.title);
+  if (voice) voice.speak(`— ${lore.title}. ${lore.body}`, { mood: 'whisper' });
+  audio.paper();
+}
+function closeLore() {
+  if (!loreOverlayOpen) return;
+  loreOverlayOpen = false;
+  const ov = E('lore-overlay');
+  if (ov) ov.classList.add('hidden');
+  if (voice) voice.stop();
+  audio.paper();
+  if (player.mobile && mobile) mobile.show();
+}
+
+// ---- CASE FILE: the journal of everything the party has heard --------------
+// Pure, local, deterministic. `jot` records a fragment the first time it is
+// heard; the overlay renders the whole file grouped by level. Because it never
+// touches the network it cannot desync the shared world.
+const JOURNAL_KIND_LABEL = { intro: 'ON ARRIVAL', beat: 'INTAKE NODE', cache: 'RECOVERED ARCHIVE', ambient: 'OVERHEARD', radio: 'RADIO TRAFFIC' };
+
+function jot(level, kind, text, key = null) {
+  if (recordJournal(journal, level, kind, text, key)) {
+    const btn = E('btn-hud-journal');
+    if (btn && !journalOverlayOpen) btn.classList.add('has-new');
+  }
+}
+
+// The arrival narration is the spine of the file; record every line.
+function recordIntro(level) {
+  introFor(level).forEach((line, i) => jot(level, 'intro', line, i));
+}
+
+function renderJournal() {
+  const body = E('journal-body');
+  if (!body) return;
+  const entries = journalEntriesFor(journal);
+  body.innerHTML = '';
+  if (!entries.length) {
+    const p = document.createElement('div');
+    p.className = 'journal-empty';
+    p.textContent = 'NOTHING RECORDED YET. TOUCH AN INTAKE NODE, FIND A HIDDEN ARCHIVE, LISTEN.';
+    body.appendChild(p);
+    return;
+  }
+  let curLevel = null;
+  for (const e of entries) {
+    if (e.level !== curLevel) {
+      curLevel = e.level;
+      const h = document.createElement('h3');
+      h.className = 'journal-level';
+      h.textContent = `LEVEL ${e.level} — ${levelTitle(e.level)}`;
+      body.appendChild(h);
+    }
+    const row = document.createElement('div');
+    row.className = 'journal-entry';
+    const kind = document.createElement('span');
+    kind.className = 'journal-kind';
+    kind.textContent = JOURNAL_KIND_LABEL[e.kind] || e.kind.toUpperCase();
+    const txt = document.createElement('div');
+    txt.className = 'journal-text';
+    txt.textContent = e.text;
+    row.appendChild(kind);
+    row.appendChild(txt);
+    body.appendChild(row);
+  }
+}
+
+function openJournal() {
+  if (journalOverlayOpen) return;
+  renderJournal();
+  const ov = E('journal-overlay');
+  if (ov) ov.classList.remove('hidden');
+  journalOverlayOpen = true;
+  const btn = E('btn-hud-journal');
+  if (btn) btn.classList.remove('has-new');
+  audio.paper();
+}
+
+function closeJournal() {
+  if (!journalOverlayOpen) return;
+  journalOverlayOpen = false;
+  const ov = E('journal-overlay');
+  if (ov) ov.classList.add('hidden');
+  if (player.mobile && mobile) mobile.show();
+}
+
+function toggleJournal() {
+  if (journalOverlayOpen) closeJournal();
+  else openJournal();
+}
+
+// ---- loot: risk/reward pickups left on hazard cells ------------------------
+// Taking one is relayed (so co-op players don't fight over the same item) and
+// either recharges the flashlight or reveals a story clue via the lore overlay.
+function takeLoot(it) {
+  if (!it || !it.id || lootTakenKeys.has(it.id)) return;
+  lootTakenKeys.add(it.id);
+  lootTaken++;
+  net.sendEvent('loot', { id: it.id, kind: it.lootKind, level: world ? world.level : 0 });
+  if (worldMgr) worldMgr.removeInteractable(it.id);
+  audio.keyPick();
+  if (it.effect === 'battery') {
+    if (flash) flash.addBattery();
+    flashText('SPARE CELL — BEAM RECHARGED');
+    audio.buzz(it.x, it.z, 0.5);
+  } else if (it.effect === 'flare') {
+    inventory.flare++;
+    flashText('ROAD FLARE — PRESS [G] TO LIGHT IT');
+    audio.keyPick();
+  } else {
+    // a recorder: the clue reads out in the same overlay as a lore cache
+    showLore({ label: it.label || 'FIELD RECORDER', lore: it.lore });
+  }
+  if (hazardState.inside) flashText('YOU STOPPED FOR THAT.');
+}
+
+// ---- flares: consumable light that is also a dinner bell -------------------
+// A lit flare floods a small radius with warm light, so the dark — and the
+// monsters that fear it — have to back up. But it burns loud, so anything
+// hunting by sound converges on it. Co-op: everyone sees every flare, and the
+// whole party eats the attention it attracts. Drops are reserved, not
+// deterministic, because the attract is a momentary event (no shared PRNG use).
+function spawnFlare(pid, x, z, key) {
+  const group = new THREE.Group();
+  group.position.set(x, 0.08, z);
+  const stick = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.03, 0.03, 0.34, 8),
+    new THREE.MeshStandardMaterial({ color: 0xb23a2a, roughness: 0.7, emissive: 0xff3a12, emissiveIntensity: 0.8 }),
+  );
+  stick.rotation.z = Math.PI / 2.4;
+  group.add(stick);
+  const light = new THREE.PointLight(0xff7a2a, 7.5, 26, 1.6);
+  light.position.y = 0.5;
+  group.add(light);
+  scene.add(group);
+  const f = { group, light, t: 0, life: 45, x, z, pid, key };
+  flares.push(f);
+  return f;
+}
+
+function clearFlares() {
+  for (const f of flares) { scene.remove(f.group); disposeGroup(f.group); }
+  flares = [];
+}
+
+function dropFlare(remote, pid, x, z, key) {
+  if (!remote) {
+    if (inventory.flare <= 0) { flashText('NO FLARES — SEARCH THE HAZARDS'); return; }
+    inventory.flare--;
+    if (key) key = `${key}:${Date.now()}`;
+    net.sendEvent('flare', { x: +x.toFixed(2), z: +z.toFixed(2), key });
+  }
+  spawnFlare(pid, x, z, key || `flare:${Date.now()}`);
+  if (monsters && monsters.escalate) monsters.escalate(1.1, 0.05);
+  if (monsters && monsters.alertArea) monsters.alertArea(x, z, 34);
+  audio.distantMetal(0.7);
+}
+
+function updateFlares(dt) {
+  for (let i = flares.length - 1; i >= 0; i--) {
+    const f = flares[i];
+    f.t += dt;
+    const lifeK = Math.max(0, 1 - f.t / f.life);
+    const flick = 0.75 + 0.25 * Math.sin(f.t * 13 + f.x);
+    f.light.intensity = 7.5 * lifeK * flick;
+    if (f.t > f.life * 0.6) f.light.color.setRGB(1, 0.42 * lifeK + 0.1, 0.09); // cooling
+    if (f.t >= f.life) {
+      scene.remove(f.group);
+      disposeGroup(f.group);
+      flares.splice(i, 1);
+    }
+  }
+}
+
+function disposeGroup(g) {
+  g.traverse((o) => {
+    if (o.isMesh) { o.geometry.dispose(); if (o.material && o.material.dispose) o.material.dispose(); }
+  });
 }
 
 // ---- exit gate: advance the whole party together ----------------------------
@@ -819,6 +1497,41 @@ window.addEventListener('keydown', (e) => {
     closeNote();
   }
 });
+
+// lore overlay close controls (same interaction grammar as notes)
+for (const id of ['lore-close-btn', 'lore-x']) {
+  const el = E(id);
+  if (!el) continue;
+  el.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); closeLore(); });
+  el.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); closeLore(); }, { passive: false });
+}
+{
+  const ov = E('lore-overlay');
+  if (ov) ov.addEventListener('touchstart', (e) => {
+    if (e.target === ov) { e.preventDefault(); closeLore(); }
+  }, { passive: false });
+}
+window.addEventListener('keydown', (e) => {
+  if (loreOverlayOpen && (e.code === 'Escape' || e.code === 'KeyX')) {
+    e.preventDefault();
+    closeLore();
+  }
+});
+
+// case-file overlay controls (same interaction grammar as notes/lore)
+for (const id of ['journal-close-btn', 'journal-x']) {
+  const el = E(id);
+  if (!el) continue;
+  el.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); closeJournal(); });
+  el.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); closeJournal(); }, { passive: false });
+}
+{
+  const ov = E('journal-overlay');
+  if (ov) ov.addEventListener('touchstart', (e) => {
+    if (e.target === ov) { e.preventDefault(); closeJournal(); }
+  }, { passive: false });
+}
+E('btn-hud-journal')?.addEventListener('click', (e) => { e.preventDefault(); toggleJournal(); });
 
 function doEmote(e) {
   if (dead) return;
@@ -873,6 +1586,10 @@ function togglePause(force) {
 const _endBtn = E('ending-continue');
 if (_endBtn) _endBtn.addEventListener('click', () => endEnding());
 
+// death screen: a visible button so touch/no-keyboard players can always retry
+const _deathBtn = E('btn-death-respawn');
+if (_deathBtn) _deathBtn.addEventListener('click', () => { if (dead && respawnT <= 0) respawn(); });
+
 let lastHudMenuToggle = 0;
 E('btn-hud-menu').addEventListener('click', () => {
   // hybrid/touch devices can fire click twice (tap + synthesized mouse click)
@@ -888,6 +1605,19 @@ E('emote-bar').addEventListener('click', (ev) => {
 });
 
 window.addEventListener('keydown', (e) => {
+  // before gameplay: the cold open and level transitions are skippable
+  if (gameState === 'opening') {
+    if (e.code === 'KeyE' || e.code === 'Space' || e.code === 'Enter' || e.code === 'Escape') {
+      e.preventDefault(); skipOpening();
+    }
+    return;
+  }
+  if (gameState === 'transition') {
+    if (e.code === 'KeyE' || e.code === 'Space' || e.code === 'Enter' || e.code === 'Escape') {
+      e.preventDefault(); skipTransition();
+    }
+    return;
+  }
   // during the finale, Enter/E/Space returns to the menu once it has finished
   if (gameState === 'ending') {
     if (!ending || ending.done) {
@@ -902,6 +1632,13 @@ window.addEventListener('keydown', (e) => {
   if (cinematic && (e.code === 'KeyE' || e.code === 'Space' || e.code === 'Enter')) {
     e.preventDefault(); skipCinematic(); return;
   }
+  // the CASE FILE overlay closes first (J toggles, Esc/X dismiss)
+  if (journalOverlayOpen) {
+    if (e.code === 'KeyJ' || e.code === 'Escape' || e.code === 'KeyX') {
+      e.preventDefault(); closeJournal();
+    }
+    return;
+  }
   if (paused) {
     if (e.code === 'Escape') togglePause(false);
     return;
@@ -909,11 +1646,20 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyE') doInteract();
   if (e.code === 'Escape') togglePause();
   if (e.code === 'KeyQ') doScream();
+  if (e.code === 'KeyJ') toggleJournal(); // CASE FILE
   if (e.code === 'KeyC') doEmote('sit'); // sit/stand toggle
   if (e.code === 'KeyF' && !dead && flash) flash.toggle();
+  if (e.code === 'KeyG' && !dead && !cinematic) {
+    const fx = player.pos.x - Math.sin(player.yaw) * 1.4;
+    const fz = player.pos.z - Math.cos(player.yaw) * 1.4;
+    dropFlare(false, net.id, fx, fz, null);
+  }
   if (e.code === 'KeyR' && dead && respawnT <= 0) respawn();
 });
 canvas.addEventListener('click', () => {
+  // tap/click skips the cold open or a level transition (touch has no E key)
+  if (gameState === 'opening') { skipOpening(); return; }
+  if (gameState === 'transition') { skipTransition(); return; }
   if (gameState === 'playing' && !player.mobile && !document.pointerLockElement) {
     canvas.requestPointerLock?.().catch?.(() => {});
   }
@@ -968,18 +1714,71 @@ function escapeHtmlMini(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// ---- objective compass -----------------------------------------------------
+// Always points at the next actionable objective (nearest un-activated site, or
+// the exit once unlocked), so nobody has to wander blindly. When the target is
+// on screen the arrow sits on it; when it is off to the side the arrow pins to
+// the screen edge and rotates. Pure UI — no world state changes.
+function updateObjectiveCompass(dt) {
+  const box = E('objective-compass');
+  if (!box) return;
+  if (!world || !objectives || gameState !== 'playing' || dead || ending || cinematic) {
+    box.classList.add('hidden'); return;
+  }
+  let target = null, label = 'OBJECTIVE';
+  if (exitUnlocked) {
+    label = 'EXIT';
+    const p = window.__dbg && window.__dbg.exitPos ? window.__dbg.exitPos() : null;
+    if (p) target = p;
+  } else if (objectives.plan.every((o) => o.kind === 'survive' || objectives.objectiveDone(o))
+      && !objectives.puzzleDone()) {
+    // sites are done — the compass switches to the lock keys
+    label = 'LOCK';
+    const keys = puzzleSites(world, world.level).filter((p) => !objectives.puzzleKeys.has(p.key));
+    if (keys.length) target = { x: keys[0].x, z: keys[0].z };
+  } else {
+    const sites = objectiveSites(world, world.level);
+    const next = sites.find((s) => !objectives.activated.has(s.key));
+    if (next) target = { x: (next.cx + 0.5) * CELL, z: (next.cz + 0.5) * CELL };
+  }
+  if (!target) { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+
+  const dx = target.x - player.pos.x, dz = target.z - player.pos.z;
+  const dist = Math.hypot(dx, dz);
+  // bearing of the target relative to the player's facing (yaw 0 = -Z)
+  const fwd = Math.atan2(-dx, -dz);
+  let rel = fwd - player.yaw;
+  while (rel > Math.PI) rel -= Math.PI * 2;
+  while (rel < -Math.PI) rel += Math.PI * 2;
+
+  const arrow = E('oc-arrow');
+  const edge = Math.abs(rel) > 0.6;
+  box.classList.toggle('edge', edge);
+  box.classList.toggle('near', dist < 8);
+  const r = 44;
+  const ox = Math.sin(rel) * r;
+  const oy = -Math.cos(rel) * r;
+  arrow.style.transform = `translate(${ox}px, ${oy}px) rotate(${rel}rad)`;
+  E('oc-label').textContent = label;
+  E('oc-dist').textContent = exitUnlocked
+    ? (dist < 8 ? 'THE WAY OUT' : `${Math.round(dist)}m`)
+    : `${Math.round(dist)}m`;
+}
+
 // ---- cinematic typewriter overlay ------------------------------------------
 // Shows `lines` one at a time typed out; after the last line + a beat, calls
 // `onDone`. Gameplay continues underneath (menus/HUD stay interactive after).
-function showCinematic(lines, pace = 3, onDone = null) {
+function showCinematic(lines, pace = 3, onDone = null, mood = 'machine') {
   if (!lines || !lines.length) { if (onDone) onDone(); return; }
   cinematic = {
     lines: lines.slice(), i: 0, t: 0, typed: 0,
-    cps: 34, minT: 1.6 + pace, onDone,
+    cps: 34, minT: 1.6 + pace, onDone, mood, spoken: -1,
   };
   const ov = E('cinematic-overlay');
   if (ov) ov.classList.remove('hidden');
   E('cinematic-line').textContent = '';
+  E('cinematic-speaker').textContent = '';
   E('cinematic-hint').classList.add('hidden');
   // NOTE: deliberately non-blocking — in co-op you must keep moving even while
   // the story narrates. The overlay is atmospheric, not a cutscene prison.
@@ -989,6 +1788,11 @@ function updateCinematic(dt) {
   if (!cinematic) return;
   const c = cinematic;
   const full = c.lines[c.i] || '';
+  if (c.spoken !== c.i) {
+    c.spoken = c.i;
+    voice.speak(full, { mood: c.mood });
+    E('cinematic-speaker').textContent = full ? voice.speakerFor(c.mood) : '';
+  }
   c.t += dt;
   c.typed = Math.min(full.length, c.typed + dt * c.cps);
   E('cinematic-line').textContent = full.slice(0, c.typed | 0);
@@ -1005,6 +1809,7 @@ function updateCinematic(dt) {
       if (cb) cb();
     } else {
       E('cinematic-line').textContent = '';
+      E('cinematic-speaker').textContent = '';
       E('cinematic-hint').classList.add('hidden');
     }
   }
@@ -1014,6 +1819,7 @@ function skipCinematic() {
   if (!cinematic) return;
   const cb = cinematic.onDone;
   cinematic = null;
+  voice.stop();
   E('cinematic-overlay').classList.add('hidden');
   if (!dead && gameState === 'playing' && !paused && !ending) player.enabled = true;
   if (cb) cb();
@@ -1022,6 +1828,15 @@ function skipCinematic() {
 // ---- the ending ------------------------------------------------------------
 function startEnding() {
   if (ending) return;
+  // a level transition or cold open may still be on screen — clear it
+  if (opening) { opening.dispose(); opening = null; }
+  if (transition) { transition.dispose(); transition = null; }
+  E('opening-overlay') && E('opening-overlay').classList.add('hidden');
+  E('opening-hint') && E('opening-hint').classList.add('hidden');
+  E('opening-line') && (E('opening-line').textContent = '');
+  E('opening-card') && E('opening-card').classList.add('hidden');
+  E('objective-compass') && E('objective-compass').classList.add('hidden');
+  audio.stopStreetAmbience();
   gameState = 'ending';
   paused = false;
   player.enabled = false;
@@ -1039,6 +1854,7 @@ function startEnding() {
   E('ending-tail').classList.add('hidden');
   E('ending-tail').innerHTML = '';
   ending = new EndingSequence(scene, camera, player, engine, audio, {
+    voice,
     onCard(card, st) { showEndingCard(card, st); },
     onTail(lines) {
       const el = E('ending-tail');
@@ -1094,6 +1910,8 @@ function updateBatteryHud() {
   const segs = Math.round(flash.battery / 25);
   el.textContent = '▮'.repeat(segs) + '▯'.repeat(4 - segs);
   el.classList.toggle('low', flash.battery < 25);
+  // consumables ride alongside the battery readout: ×N flares in the pocket
+  if (inventory.flare > 0) el.textContent += `   ✜×${inventory.flare}`;
 }
 
 // spectator camera: hover near the next living teammate (found-footage style)
@@ -1213,7 +2031,6 @@ function monsterDiagLogger(dt) {
 // main loop
 let last = performance.now();
 let sendAcc = 0;
-let objHudAcc = 0;
 let fpsFrames = 0, fpsTime = 0, fpsValue = 60, lowFpsT = 0, autoDropped = false;
 
 function loop() {
@@ -1247,6 +2064,20 @@ function loop() {
     return;
   }
 
+  // the cold open / level transitions are story mode: camera is scripted, the
+  // world keeps streaming underneath, gameplay is suspended until they finish
+  if (gameState === 'opening' || gameState === 'transition') {
+    if (opening) opening.update(dt);
+    if (transition) transition.update(dt);
+    if (worldMgr && world) worldMgr.ensure(player.pos.x, player.pos.z);
+    if (worldMgr) worldMgr.updateDoors(dt);
+    registerChunkLights();
+    if (lightMgr && world) lightMgr.update(dt, player.pos.x, player.pos.z, camera);
+    remotePlayers.update(dt, camera.position);
+    engine.render(dt, now / 1000);
+    return;
+  }
+
   if (gameState !== 'playing' || !world) return;
 
   // story cinematics advance regardless of pause/death (they gate gameplay)
@@ -1272,16 +2103,23 @@ function loop() {
     spectateCamera(dt);
     if (respawnT > 0) {
       respawnT -= dt;
-      if (respawnT <= 0) E('death-sub').textContent = 'PRESS [R] TO RESPAWN';
-      else E('death-sub').textContent = `RESPAWN IN ${Math.ceil(respawnT)}s`;
+      const sub = E('death-sub');
+      const btn = E('btn-death-respawn');
+      if (respawnT <= 0) {
+        sub.textContent = 'PRESS [R] TO RESPAWN';
+        if (btn) btn.disabled = false;
+      } else {
+        sub.textContent = `RESPAWN IN ${Math.ceil(respawnT)}s`;
+      }
     }
   }
   player.flashOn = flash && flash.on ? 1 : 0;
   worldMgr.ensure(player.pos.x, player.pos.z);
   worldMgr.updateDoors(dt);
+  updateFlares(dt);
   registerChunkLights();
   lightMgr.update(dt, player.pos.x, player.pos.z, camera);
-  if (flash) flash.update(dt);
+  if (flash) flash.update(dt, player);
   updateBatteryHud();
   remotePlayers.update(dt, camera.position);
   monsters.update(dt, player, remotePlayers, null);
@@ -1308,6 +2146,13 @@ function loop() {
     }
   }
 
+  // level signature hazard: warning -> active windows for this level
+  updateHazard(dt, (now - startTime) / 1000);
+
+  // objective guidance: a compass to the next goal (throttled to ~5Hz)
+  lastCompass += dt;
+  if (lastCompass > 0.2) { lastCompass = 0; updateObjectiveCompass(dt); }
+
   screamCooldown = Math.max(0, screamCooldown - dt);
   // host streams monsters at 8Hz
   if (isHost && monsters.monsters.size) {
@@ -1328,13 +2173,16 @@ function loop() {
   // interact prompt
   currentInteract = dead ? null : findInteractable();
   const prompt = E('interact-prompt');
-  if (currentInteract && !noteOverlayOpen) {
+  if (currentInteract && !noteOverlayOpen && !loreOverlayOpen && !journalOverlayOpen) {
     prompt.classList.remove('hidden');
     E('interact-text').textContent =
       currentInteract.type === 'note' ? 'READ NOTE'
       : currentInteract.type === 'battery' ? 'TAKE BATTERY'
       : currentInteract.type === 'key' ? 'TAKE RUSTY KEY'
       : currentInteract.type === 'site' ? 'ACTIVATE INTAKE NODE'
+      : currentInteract.type === 'cache' ? `OPEN ${(currentInteract.data.label || 'ARCHIVE').toUpperCase()}`
+      : currentInteract.type === 'puzzle' ? `TURN KEY — ${(currentInteract.data.label || 'LOCK').toUpperCase()}`
+      : currentInteract.type === 'loot' ? `TAKE ${(currentInteract.data.label || 'PICKUP').toUpperCase()}`
       : currentInteract.type === 'exit' ? (exitUnlocked ? 'ENTER THE EXIT' : 'SEALED — OBJECTIVES REMAIN')
       : doorPromptText(currentInteract.data);
   } else {
@@ -1397,11 +2245,35 @@ function leaveToMenu() {
   E('cinematic-overlay').classList.add('hidden');
   E('ending-overlay').classList.add('hidden');
   noteOverlayOpen = false;
+  loreOverlayOpen = false;
+  journalOverlayOpen = false;
+  E('journal-overlay')?.classList.add('hidden');
+  E('btn-hud-journal')?.classList.remove('has-new');
+  journal = newJournalRecord(); // a new run begins a new case file
   cinematic = null;
+  voice.stop();
   objectives = null;
   exitUnlocked = false;
+  cachesFound = new Set();
+  cacheHintShown = new Set();
+  hazardCellsSet = new Set();
+  exposure = 0;
+  lootTaken = 0;
+  lootTakenKeys = new Set();
+  clearFlares();
+  inventory = { flare: 0 };
+  hazardState = { active: false, warn: false, inside: false, label: null };
+  if (world) { const lp = panelMaterial(); if (lp) lp.opacity = 1; }
+  E('lore-overlay') && E('lore-overlay').classList.add('hidden');
+  // re-arm the cold open for the next fresh session
+  openingDone = false;
   if (ending) { ending.dispose(); ending = null; }
+  if (opening) { opening.dispose(); opening = null; }
+  if (transition) { transition.dispose(); transition = null; }
+  E('opening-overlay') && E('opening-overlay').classList.add('hidden');
+  E('objective-compass') && E('objective-compass').classList.add('hidden');
   audio.stopAmbience();
+  audio.stopStreetAmbience();
   if (worldMgr) {
     for (const key of [...worldMgr.chunks.keys()]) worldMgr.unload(key);
     worldMgr = null;
@@ -1432,7 +2304,12 @@ window.__dbg = {
     complete: objectives.isComplete(),
     progress: objectives.progress(),
     holdT: objectives.holdT,
+    puzzle: [...objectives.puzzleKeys],
+    puzzleGoal: objectives.puzzleGoalN(),
+    puzzleDone: objectives.puzzleDone(),
   } : null),
+  puzzlePos: () => (world ? puzzleSites(world, world.level).map((p) => ({ key: p.key, cx: p.cx, cz: p.cz, x: p.x, z: p.z, label: p.label, index: p.index })) : []),
+  puzzleGoal: () => (world ? puzzleGoal(world.level) : 0),
   exitUnlocked: () => exitUnlocked,
   sites: () => (world ? objectiveSites(world, world.level).map((s) => ({ key: s.key, x: (s.cx + 0.5) * 4, z: (s.cz + 0.5) * 4, index: s.index })) : []),
   exitPos: () => {
@@ -1440,8 +2317,80 @@ window.__dbg = {
     const [cx, cz] = exitCellFor(world, world.level);
     return { cx, cz, x: (cx + 0.5) * 4, z: (cz + 0.5) * 4 };
   },
+  cachePos: () => {
+    if (!world) return null;
+    const c = loreCacheFor(world, world.level);
+    return { key: c.key, cx: c.cx, cz: c.cz, x: c.x, z: c.z, label: c.label, room: c.room, lore: c.lore };
+  },
+  cacheFound: () => [...cachesFound],
+  hazard: () => ({
+    kind: hazardFor(world ? world.level : 0).kind,
+    label: hazardState.label,
+    active: hazardState.active,
+    warn: hazardState.warn,
+    inside: hazardState.inside,
+    exposure: +exposure.toFixed(3),
+    lootTaken,
+    dead,
+    cells: hazardCellsSet.size,
+    cellKey: world ? `${Math.floor(player.pos.x / 4)},${Math.floor(player.pos.z / 4)}` : null,
+  }),
+  hazardPos: () => (world ? hazardCells(world, world.level).map(([cx, cz]) => ({ cx, cz, x: (cx + 0.5) * 4, z: (cz + 0.5) * 4 })) : []),
+  hazardAt: (t) => (world ? hazardPhase(world, world.level, t) : null),
+  lootPos: () => (world ? hazardCells(world, world.level).map(([cx, cz]) => ({
+    id: `loot:${world.level}:${cx},${cz}`,
+    cx, cz, x: (cx + 0.5) * 4, z: (cz + 0.5) * 4,
+    kind: lootKindFor(world.level, cx, cz),
+  })) : []),
+  lootTakenList: () => [...lootTakenKeys],
+  inventory: () => ({ ...inventory }),
+  flares: () => flares.map((f) => ({ x: +f.x.toFixed(2), z: +f.z.toFixed(2), t: +f.t.toFixed(2), pid: f.pid })),
+  dropFlare: () => {
+    const fx = player.pos.x - Math.sin(player.yaw) * 1.4;
+    const fz = player.pos.z - Math.cos(player.yaw) * 1.4;
+    dropFlare(false, net.id, fx, fz, null);
+  },
+  setExposure: (v) => { exposure = Math.max(0, Math.min(1, v)); },
+  tickHazard: (dt = 1 / 60) => { updateHazard(dt, (performance.now() - startTime) / 1000); return exposure; },
+  setElapsed: (v) => { startTime = performance.now() - v * 1000; },
+  loreOpen: () => loreOverlayOpen,
+  loreShown: () => (loreOverlayOpen ? { title: E('lore-title') ? E('lore-title').textContent : null, body: E('lore-body') ? E('lore-body').textContent : null } : null),
+  // CASE FILE journal: deterministic, local, never networked
+  journal: () => journalEntriesFor(journal),
+  journalCount: () => journalEntriesFor(journal).length,
+  journalOpen: () => journalOverlayOpen,
+  journalOpenFn: () => openJournal(),
+  journalCloseFn: () => closeJournal(),
+  journalToggle: () => toggleJournal(),
+  journalText: () => (journalOverlayOpen && E('journal-body') ? E('journal-body').textContent : null),
+  journalHasNew: () => !!(E('btn-hud-journal') && E('btn-hud-journal').classList.contains('has-new')),
+  journalIntro: (level) => { recordIntro(level); return journalEntriesFor(journal).length; },
+  openCache: () => {
+    if (!world) return false;
+    const c = loreCacheFor(world, world.level);
+    openLoreCache({ key: c.key, x: c.x, z: c.z, label: c.label, lore: c.lore });
+    return true;
+  },
+  closeLore: () => closeLore(),
   cinematicActive: () => !!cinematic,
   skipCinematic: () => skipCinematic(),
+  openingActive: () => !!opening,
+  openingPhase: () => (opening ? opening.phases[opening.phaseIdx].key : null),
+  startOpening: () => startOpening(),
+  skipOpening: () => skipOpening(),
+  transitionActive: () => !!transition,
+  transitionKind: () => (transition ? transition.kind : null),
+  startTransition: (lv) => startTransition(lv !== undefined ? lv : (world ? world.level : 0)),
+  skipTransition: () => skipTransition(),
+  compass: () => {
+    const box = E('objective-compass');
+    if (!box) return null;
+    return {
+      visible: !box.classList.contains('hidden'),
+      label: E('oc-label') ? E('oc-label').textContent : null,
+      dist: E('oc-dist') ? E('oc-dist').textContent : null,
+    };
+  },
   endingActive: () => !!ending,
   // test helper: walk the whole objective chain without moving the player
   completeObjectives: () => {
@@ -1454,15 +2403,125 @@ window.__dbg = {
     }
     // satisfy any survive objective
     for (const o of objectives.plan) if (o.kind === 'survive') objectives.holdT = (o.seconds || 0) + 1;
+    // and turn every lock key (test helper walks the whole chain)
+    for (const pz of puzzleSites(world, world.level)) objectives.collectPuzzle(pz.key);
     if (objectives.isComplete()) unlockExit();
     return objectives.isComplete();
   },
+  completePuzzle: () => {
+    if (!objectives || !world) return false;
+    const pz = puzzleSites(world, world.level).find((p) => !objectives.puzzleKeys.has(p.key));
+    if (!pz) return objectives.puzzleDone();
+    collectPuzzle(pz); // exercises the real relay + remove path
+    return objectives.puzzleDone();
+  },
+  giveFlare: (n = 1) => { inventory.flare += n; updateBatteryHud(); return inventory.flare; },
+  setFlares: (n = 0) => { inventory.flare = Math.max(0, n | 0); updateBatteryHud(); return inventory.flare; },
   startEnding: () => startEnding(),
   endEnding: () => endEnding(),
   flash: () => (flash ? { on: flash.on, battery: flash.battery } : null),
+  // QA hook: force the beam intensity (proves whether a screen feature is the
+  // light's hotspot or a separate mesh)
+  setFlashIntensity: (n) => { if (flash) { flash.spot.intensity = n; flash._forced = n; } return flash ? flash.spot.intensity : null; },
+  // QA hook: toggle the bloom pass to isolate its contribution to screen glow
+  bloom: (on, strength) => {
+    if (on === undefined) return { enabled: engine.bloom.enabled, strength: engine.bloom.strength, radius: engine.bloom.radius, threshold: engine.bloom.threshold };
+    engine.bloom.enabled = !!on;
+    if (typeof strength === 'number') engine.bloom.strength = strength;
+    return { enabled: engine.bloom.enabled, strength: engine.bloom.strength };
+  },
+  // QA hook: hide/show the unlit emissive meshes (light panels, objective
+  // beacons, exit gate glow) to tell a lit MESH apart from a real light pool
+  setEmissive: (v) => {
+    let n = 0;
+    scene.traverse((o) => {
+      if (o.name === 'lightpanels') { o.visible = !!v; n++; }
+      const m = o.material;
+      if (m && m.isMeshBasicMaterial && o.name !== 'lightpanels') { o.visible = !!v; n++; }
+    });
+    return n;
+  },
+  // flashlight shape + held-lag state (for tests: the beam must be narrow and
+  // must trail the camera)
+  flashlightCone: () => (flash ? {
+    angle: flash.spot.angle,
+    penumbra: flash.spot.penumbra,
+    distance: flash.spot.distance,
+    decay: flash.spot.decay,
+    intensity: flash.spot.intensity,
+    spillAngle: flash.spill.angle,
+    spillIntensity: flash.spill.intensity,
+    map: !!flash.spot.map,
+    cookie: flash.spot.map ? (flash.spot.map.image ? flash.spot.map.image.width : 0) : 0,
+    shadows: !!flash.spot.castShadow,
+    // the beam must be neutral white — a warm tint over the already-warm
+    // Level 0 palette is what painted a yellow halo across the screen
+    color: [flash.spot.color.r, flash.spot.color.g, flash.spot.color.b],
+    // guard against the old translucent cone overlay creeping back: the
+    // flashlight must not own any mesh at all (only lights). Must be false.
+    beamMesh: !!flash.beam,
+    // extra info: how many additive/transparent meshes exist anywhere in the
+    // scene (should be unrelated effects, never a screen-filling beam cone)
+    sceneAdditive: (() => {
+      let n = 0;
+      scene.traverse((o) => {
+        if (o.isMesh && o.material && o.material.transparent && o.material.blending === THREE.AdditiveBlending) n++;
+      });
+      return n;
+    })(),
+    hand: [flash._hand.x, flash._hand.y, flash._hand.z],
+    mount: [flash._mount.x, flash._mount.y, flash._mount.z],
+    aim: [flash._aim.x, flash._aim.y, flash._aim.z],
+  } : null),
+  // aim lag probe: settle the beam onto a still view, then rotate the camera at
+  // a constant rate and read the steady-state trailing angle. A held light lags
+  // a sustained turn by ~(turn rate × time constant) — felt, not disorienting.
+  flashAimLag: (omega = 2, pitchOmega = 0) => {
+    if (!flash || !flash.on) return null;
+    const dt = 0.016;
+    const setView = (yaw, pitch) => {
+      player.yaw = player.yawTarget = yaw;
+      player.pitch = player.pitchTarget = pitch;
+      camera.rotation.order = 'YXZ';
+      camera.rotation.y = yaw; camera.rotation.x = pitch;
+      camera.updateMatrixWorld(true);
+    };
+    setView(0, 0);
+    for (let i = 0; i < 90; i++) { setView(0, 0); flash.update(dt, player); }
+    let yaw = 0, pitch = 0;
+    for (let i = 0; i < 100; i++) {
+      yaw += omega * dt; pitch += pitchOmega * dt;
+      setView(yaw, pitch);
+      flash.update(dt, player);
+    }
+    const f = new THREE.Vector3(); camera.getWorldDirection(f);
+    const a = flash._aim;
+    const dot = Math.max(-1, Math.min(1, f.x * a.x + f.y * a.y + f.z * a.z));
+    return { lagRad: Math.acos(dot), omega, pitchOmega, aim: [a.x, a.y, a.z], fwd: [f.x, f.y, f.z] };
+  },
+  voiceSpeaking: () => voice.speaking,
+  voiceSupported: () => voice.supported,
+  voiceEnabled: () => voice.enabled,
+  speaking: () => voice.speaking,
+  speakerFor: (mood) => voice.speakerFor(mood),
+  // story-mode internals (tests drive these deterministically; rAF is throttled
+  // in headless runs, so a harness needs to advance the sequences by hand)
+  cinematicActive: () => !!cinematic,
+  openActive: () => !!opening,
+  transitionActive: () => !!transition,
+  openState: () => (opening ? { phase: opening.phaseIdx, key: opening.phases[opening.phaseIdx].key, shot: opening.phases[opening.phaseIdx].shot, t: opening.t, line: opening.lineIdx, card: opening.phases[opening.phaseIdx].card } : null),
+  _tickOpen: (n, dt) => { for (let i = 0; i < n && opening && !opening.done; i++) opening.update(dt); },
+  _tickTransition: (n, dt) => { for (let i = 0; i < n && transition && !transition.done; i++) transition.update(dt); },
+  _tickEnding: (n, dt) => { for (let i = 0; i < n && ending && !ending.done; i++) { ending.tickAnimation(dt); ending.update(dt); } },
+  endingTime: () => (ending ? ending.t : -1),
+  endingStage: () => (ending ? (ENDING.stages[ending.stageIdx] || {}).key || null : null),
+  endingOverlayVisible: () => !!(ending && ending._overlay && ending._overlay.visible),
+  endingWatch: () => (ending ? +ending._faceCam.toFixed(3) : -1),
+  endingFiguresYaw: () => (ending ? ending._figures.map((g) => +g.rotation.y.toFixed(3)) : []),
   monsters: () => (monsters ? monsters.monsters.size : 0),
   monsterTypes: () => (monsters ? [...monsters.monsters.values()].map((m) => `${m.type}:${m.state}`) : []),
   monsterIds: () => (monsters ? [...monsters.monsters.keys()] : []),
+  monsterTension: () => (monsters ? (monsters.tension || 0) : 0),
   monsterDiag: () => {
     if (!monsters) return null;
     return [...monsters.monsters.values()].map((m) => {
@@ -1485,6 +2544,8 @@ window.__dbg = {
   },
   scream: () => doScream(true),
   respawn: () => respawn(),
+  die: () => localDeath(), // test hook: run the real death flow
+  death: () => ({ dead, respawnT, overlay: !E('death-overlay').classList.contains('hidden'), fade: !E('fade').classList.contains('clear') }),
   _ev: [], // ring of recent event kinds seen (debug/test)
   placeNote: (dx, dz) => {
     if (!worldMgr) return null;
@@ -1524,6 +2585,8 @@ window.__dbg = {
   })) : []),
   keys: () => [...keyInventory],
   interact: () => { currentInteract = findInteractable(); doInteract(); return currentInteract ? currentInteract.type : null; },
+  isHost: () => isHost,
+  _tickCinematic: (n, dt) => { for (let i = 0; i < n && cinematic; i++) updateCinematic(dt); },
   prompt: () => (E('interact-text') ? E('interact-text').textContent : null),
   nearInteractable: () => findInteractable(),
   placedNotes: () => {
@@ -1533,8 +2596,41 @@ window.__dbg = {
   },
   teleport: (x, z, yaw = 0) => { player.pos.x = x; player.pos.z = z; player.yaw = player.yawTarget = yaw; },
   step: (dt) => { player.update(dt, world, worldMgr); },
+  // advance the death respawn timer deterministically (rAF is throttled in
+  // headless runs, so tests cannot wait out the real 6s)
+  _tickDead: (dt) => {
+    if (dead && respawnT > 0) {
+      respawnT -= dt;
+      if (respawnT <= 0) {
+        E('death-sub').textContent = 'PRESS [R] TO RESPAWN';
+        const b = E('btn-death-respawn'); if (b) b.disabled = false;
+      }
+    }
+  },
   remoteAnims: () => (remotePlayers ? [...remotePlayers.players.values()].map((p) => p.anim) : []),
   remoteY: () => (remotePlayers ? [...remotePlayers.players.values()].map((p) => p.cur.y) : []),
+  // QA: raycast from the camera and report what is hit. With (nx,ny) it fires
+  // through that normalised screen point (-1..1) instead of dead centre — used
+  // to identify any object sitting directly in front of the player.
+  raycast: (maxD = 40, nx = 0, ny = 0) => {
+    const rc = new THREE.Raycaster();
+    const o = new THREE.Vector3(); camera.getWorldPosition(o);
+    const d = new THREE.Vector3();
+    if (nx || ny) d.set(nx, ny, 0.5).unproject(camera).sub(o).normalize();
+    else camera.getWorldDirection(d);
+    rc.set(o, d);
+    rc.far = maxD;
+    return rc.intersectObjects(scene.children, true).slice(0, 6).map((h) => {
+      const ob = h.object;
+      const m = Array.isArray(ob.material) ? ob.material[0] : ob.material;
+      return {
+        name: ob.name || '(anon)', geo: ob.geometry ? ob.geometry.type : '?',
+        dist: +h.distance.toFixed(2),
+        col: m && m.color ? [m.color.r, m.color.g, m.color.b].map((v) => +v.toFixed(2)) : null,
+        basic: !!(m && m.isMeshBasicMaterial),
+      };
+    });
+  },
 };
 // boot message fades only after at least one frame has run, so we know
 // the module graph actually executed (not a bare module-load failure).
@@ -1562,6 +2658,9 @@ window.addEventListener('touchstart', () => {
     if (gameState === 'playing' && !mobile) {
       mobile = new MobileControls(player, doInteract, doEmote, togglePause);
       mobile.onScream = doScream;
+      mobile.onFlare = () => dropFlare(false, net.id,
+        player.pos.x - Math.sin(player.yaw) * 1.4,
+        player.pos.z - Math.cos(player.yaw) * 1.4, null);
       mobile.show();
     }
   }

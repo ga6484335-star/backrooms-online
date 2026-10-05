@@ -25,6 +25,7 @@ export class EndingSequence {
     this.player = player;
     this.engine = engine;
     this.audio = audio;
+    this.voice = opts.voice || null;
     this.onCard = opts.onCard || (() => {});
     this.onDone = opts.onDone || (() => {});
     this.onTail = opts.onTail || (() => {});
@@ -43,6 +44,9 @@ export class EndingSequence {
     this._backroomsBg = null;
     this._saved = null;
     this._cards = new Set();
+    this._warm = 0;
+    this._sfx = new Set();
+    this._faceCam = 0;   // 0..1 blend: the others turn to look at you at the reveal
     this._buildSet();
   }
 
@@ -98,6 +102,28 @@ export class EndingSequence {
     this._seam.position.set(0, 46, -120);
     this.group.add(this._seam);
 
+    // the camcorder returns at the replay beat: the same hand + REC dot as the
+    // cold open. A child of the camera, so it holds its framing as the world
+    // loops back into found-footage.
+    this._overlay = new THREE.Group();
+    this._overlay.visible = false;
+    const handMat = new THREE.MeshStandardMaterial({ color: 0xb98f76, roughness: 0.85, transparent: true, opacity: 0 });
+    const forearm = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 0.62), handMat);
+    forearm.position.set(0.3, -0.3, -0.5);
+    forearm.rotation.set(-0.35, 0.25, 0.18);
+    this._overlay.add(forearm);
+    const camMat = new THREE.MeshStandardMaterial({ color: 0x14161a, roughness: 0.5, metalness: 0.3, transparent: true, opacity: 0 });
+    const camBody = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.19, 0.3), camMat);
+    camBody.position.set(0.12, -0.2, -0.62);
+    camBody.rotation.set(-0.12, 0.1, 0);
+    this._overlay.add(camBody);
+    this._rec = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0xff3a2a, transparent: true, opacity: 0, fog: false }));
+    this._rec.position.set(0.21, -0.13, -0.47);
+    this._overlay.add(this._rec);
+    this._overlayMats = [handMat, camMat, this._rec.material];
+    this.camera.add(this._overlay);
+
     // remember the backrooms look so we can fall back into it at the end
     this._saved = {
       bg: this.scene.background ? (this.scene.background.isColor ? this.scene.background.clone() : null) : null,
@@ -123,9 +149,37 @@ export class EndingSequence {
       }
     }
     this._animateCamera(dt);
+    this._tickAudio();
     if (!this.done && this.t >= this.duration) {
       this.done = true;
       this.onDone();
+    }
+  }
+
+  // Diegetic ending audio: a wind/hum bed that warms as the surface "opens",
+  // then a rising unease as the loop reveals itself. The last beat keeps the
+  // room hum alive under the black — the Backrooms are not finished.
+  _tickAudio() {
+    if (!this.audio) return;
+    if (!this._audioStarted) {
+      this._audioStarted = true;
+      if (this.audio.startEndingAmbience) this.audio.startEndingAmbience();
+    }
+    const t = this.t;
+    let warm = 0;
+    if (t > 6) warm = Math.min(1, (t - 6) / 20);
+    if (t > 33) warm -= (t - 33) / 12;       // dread pulls the warmth back out
+    if (t > 55) warm = Math.min(warm, -0.9); // the replay: cold, wrong, closed
+    this.audio.setEndingWarm && this.audio.setEndingWarm(warm);
+
+    // the camcorder overlay fades in with the replay and settles over the beat
+    const ov = t > 55 ? Math.min(1, (t - 55) / 3) : 0;
+    if (ov > 0 || this._overlay.visible) {
+      this._overlay.visible = ov > 0.001;
+      this._overlayMats[0].opacity = ov * 0.95;
+      this._overlayMats[1].opacity = ov;
+      // REC blinks like the cold open's dot
+      this._rec.material.opacity = ov * (Math.sin(t * 6) > 0 ? 0.95 : 0.25);
     }
   }
 
@@ -133,7 +187,20 @@ export class EndingSequence {
     if (this._cards.has(st.key)) return;
     this._cards.add(st.key);
     this.onCard(st.card, st);
+    // the finale is the Archivist speaking — voice it with the machine mood
+    if (this.voice && st.card) this.voice.speak(st.card, { mood: st.key === 'end' ? 'machine' : 'whisper' });
     if (st.glitch && this.engine && this.engine.bumpGlitch) this.engine.bumpGlitch(st.glitch);
+    // per-beat diegetic cues. The twist beats each get a distinct tell, so the
+    // reveal is carried by sound as well as the card (no jump scare).
+    const sfx = {
+      door:   () => this.audio.doorCreak && this.audio.doorCreak(0, 0),
+      light:  () => this.audio.fluorescentBurst && this.audio.fluorescentBurst(),
+      rec:    () => this.audio.subDrop && this.audio.subDrop(38, 2.2),
+      mirror: () => this.audio.tear && this.audio.tear(1.6),
+      reveal: () => { this.audio.subDrop && this.audio.subDrop(30, 3.0); this.audio.tapeGlitch && this.audio.tapeGlitch(1.2); },
+      replay: () => this.audio.machineLurch && this.audio.machineLurch(2.0),
+    };
+    if (sfx[st.key] && this.audio) { try { sfx[st.key](); } catch (e) { /* audio may not be ready */ } }
   }
 
   _animateCamera(dt) {
@@ -191,11 +258,31 @@ export class EndingSequence {
 
   tickAnimation(dt) {
     this.tickEnvironment();
-    // figures settle and slowly turn so they are not statues
-    for (const g of this._figures) g.rotation.y += dt * 0.05;
+    // The others are not statues: they turn to watch YOU as the twist lands.
+    // A slow, uniform head-turn — unsettling precisely because it is calm and
+    // late, not a jump scare. `_faceCam` eases in once the seam is visible.
+    const st = ENDING.stages[Math.max(0, this.stageIdx)] || ENDING.stages[0];
+    const watch = st.env === 'crack' || st.env === 'void';
+    this._faceCam += ((watch ? 1 : 0) - this._faceCam) * (1 - Math.pow(0.02, dt));
+    for (const g of this._figures) {
+      g.rotation.y += dt * 0.05 * (1 - this._faceCam); // idle turn fades out
+      if (this._faceCam > 0.01) {
+        // face the camera (avatars render forward at yaw + PI, so the facing
+        // angle is atan2(dx,dz) - PI)
+        const dx = this.camera.position.x - g.position.x;
+        const dz = this.camera.position.z - g.position.z;
+        const face = Math.atan2(dx, dz) - Math.PI;
+        let d = face - g.rotation.y;
+        d = Math.atan2(Math.sin(d), Math.cos(d));
+        g.rotation.y += d * Math.min(1, dt * 2.2) * this._faceCam;
+      }
+    }
   }
 
   dispose() {
+    this.voice && this.voice.stop();
+    if (this.audio && this.audio.stopEndingAmbience) this.audio.stopEndingAmbience();
+    if (this._overlay) { this.camera.remove(this._overlay); if (this._overlayMats) for (const m of this._overlayMats) m.dispose && m.dispose(); }
     this.scene.remove(this.group);
     this.group.traverse((o) => {
       if (o.isMesh) { o.geometry.dispose(); if (o.material && o.material.dispose) o.material.dispose(); }

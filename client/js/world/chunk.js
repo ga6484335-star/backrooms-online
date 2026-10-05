@@ -8,7 +8,7 @@ import { GeoBuilder, PROP_BUILDERS } from '../props.js';
 import { hashStr, rngFrom, chance, range, intRange } from '../rng.js';
 import { getLevel } from '../levels.js';
 import { materialsFor } from '../materials.js';
-import { objectiveSites, exitCellFor } from '../objectives.js';
+import { objectiveSites, exitCellFor, loreCacheFor, hazardFor, hazardCells, lootKindFor, lootFor, puzzleSites } from '../objectives.js';
 
 // door leaf materials (cached per level): aged painted wood / metal handle
 const doorMatCache = new Map();
@@ -353,6 +353,51 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
     group.add(em);
   }
 
+  // ---- level hazard geometry: a slow "wet floor" sheet under every hazard
+  // cell. main.js raises its opacity per-frame only while the hazard is active.
+  const hazardGroup = new THREE.Group();
+  hazardGroup.name = 'hazards';
+  hazardGroup.userData.kind = hazardFor(level).kind;
+  let hazardCountHere = 0;
+  {
+    const hz = hazardFor(level);
+    if (hz.kind !== 'none') {
+      for (const [cx, cz] of hazardCells(world, level)) {
+        if (Math.floor(cx / CELLS_PER_CHUNK) !== chunkX) continue;
+        if (Math.floor(cz / CELLS_PER_CHUNK) !== chunkZ) continue;
+        const hx = (cx + 0.5) * CELL, hzz = (cz + 0.5) * CELL;
+        const quad = new THREE.Mesh(
+          new THREE.PlaneGeometry(2.5, 2.5),
+          new THREE.MeshBasicMaterial({ color: hz.kind === 'current' ? 0x2a6cff : 0xb04a1a,
+            transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }),
+        );
+        quad.rotation.x = -Math.PI / 2;
+        quad.position.set(hx, 0.06, hzz);
+        quad.renderOrder = 3;
+        quad.userData.hazard = true;
+        hazardGroup.add(quad);
+        hazardCountHere++;
+
+        // risk/reward loot sitting ON the hazard cell — you must time the surge
+        const lootKind = lootKindFor(level, cx, cz);
+        const loot = lootFor(lootKind);
+        const crate = new THREE.Mesh(
+          new THREE.BoxGeometry(0.34, 0.34, 0.34),
+          new THREE.MeshBasicMaterial({ color: lootKind === 'recorder' ? 0x66e0c0 : 0xffd35a }),
+        );
+        crate.position.set(hx, 0.45, hzz);
+        crate.renderOrder = 2;
+        hazardGroup.add(crate);
+        const lootId = `loot:${level}:${cx},${cz}`;
+        crate.name = `lootmesh:${lootId}`;
+        notes.push({ x: hx, z: hzz, id: lootId, loot: true });
+        interactables.push({ kind: 'loot', key: lootId, id: lootId, cx, cz, x: hx, z: hzz,
+          lootKind, label: loot.label, lore: { title: loot.label, body: loot.body }, effect: loot.effect });
+      }
+    }
+  }
+  if (hazardCountHere) group.add(hazardGroup);
+
   // ---- progression interactables: objective sites + the level exit gate.
   // Placement is a pure function of (seed, level) via objectives.js, so every
   // client builds the same markers at the same world position. Runtime "used"
@@ -366,12 +411,42 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
       colliders.push({ x: (site.cx + 0.5) * CELL, z: (site.cz + 0.5) * CELL, r: 0.5 });
       interactables.push({ kind: 'site', key: site.key, index: site.index, cx: site.cx, cz: site.cz,
         x: (site.cx + 0.5) * CELL, z: (site.cz + 0.5) * CELL });
+      // a cold pool of light under the node so it reads as active machinery and
+      // can be found in the dark without hunting wall to wall
+      lights.push({ cx: site.cx, cz: site.cz, x: (site.cx + 0.5) * CELL, z: (site.cz + 0.5) * CELL, y: 2.6,
+        color: 0x9fd0ff, intensity: 9, distance: 9,
+        flickerSeed: hashStr(seed, `objlight:${level}:${site.cx},${site.cz}`), special: null });
+    }
+    // puzzle keys: a chain of small keyed pedestals that seal the exit. They are
+    // placed like objectives so every client finds the identical cells.
+    for (const pz of puzzleSites(world, level)) {
+      if (Math.floor(pz.cx / CELLS_PER_CHUNK) !== chunkX) continue;
+      if (Math.floor(pz.cz / CELLS_PER_CHUNK) !== chunkZ) continue;
+      buildPuzzleNode(gb, gbEmiss, pz, level);
+      colliders.push({ x: pz.x, z: pz.z, r: 0.42 });
+      interactables.push({ kind: 'puzzle', key: pz.key, index: pz.index, cx: pz.cx, cz: pz.cz,
+        x: pz.x, z: pz.z, label: pz.label });
+      lights.push({ cx: pz.cx, cz: pz.cz, x: pz.x, z: pz.z, y: 2.2,
+        color: 0xffcf7a, intensity: 6, distance: 7,
+        flickerSeed: hashStr(seed, `pzlight:${level}:${pz.cx},${pz.cz}`), special: null });
     }
     const [ecx, ecz] = exitCellFor(world, level);
     if (Math.floor(ecx / CELLS_PER_CHUNK) === chunkX && Math.floor(ecz / CELLS_PER_CHUNK) === chunkZ) {
       const ex = (ecx + 0.5) * CELL, ez = (ecz + 0.5) * CELL;
       buildExitGate(gb, gbEmiss, ex, ez, world.cellAt(ecx, ecz).ceilH);
       interactables.push({ kind: 'exit', key: `exit:${level}`, cx: ecx, cz: ecz, x: ex, z: ez });
+    }
+    // the hidden lore cache for this level (inside a special room, off-path)
+    const cache = loreCacheFor(world, level);
+    if (Math.floor(cache.cx / CELLS_PER_CHUNK) === chunkX && Math.floor(cache.cz / CELLS_PER_CHUNK) === chunkZ) {
+      buildLoreCache(gb, gbEmiss, cache);
+      colliders.push({ x: cache.x, z: cache.z, r: 0.6 });
+      interactables.push({ kind: 'cache', key: cache.key, label: cache.label,
+        cx: cache.cx, cz: cache.cz, x: cache.x, z: cache.z, lore: cache.lore });
+      // a dim, wrong-coloured pool so the room reads as "not part of the level"
+      lights.push({ cx: cache.cx, cz: cache.cz, x: cache.x, z: cache.z, y: 2.4,
+        color: 0xff9a4a, intensity: 6, distance: 7,
+        flickerSeed: hashStr(seed, `cachelight:${level}:${cache.cx},${cache.cz}`), special: null });
     }
     // fixture that lets the exit read as a lit doorway
     const exSite = interactables.find((it) => it.kind === 'exit');
@@ -386,18 +461,62 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
   return group;
 }
 
-// An "intake node": a black monolith pedestal with twin tape reels on top.
-// Reads as machinery the Backrooms left running.
+// An "intake node": a black monolith pedestal with twin tape reels on top,
+// crowned by a tall cold beacon so it can be spotted across a room and read as
+// a destination rather than a random prop. Reads as machinery the Backrooms
+// left running.
 function buildObjectiveSite(gb, gbEmiss, site, level) {
-  const b = makeShiftBuilder(gb, (site.cx + 0.5) * CELL, (site.cz + 0.5) * CELL, (level % 4) * 0.35 - 0.5);
+  const x = (site.cx + 0.5) * CELL, z = (site.cz + 0.5) * CELL;
+  const b = makeShiftBuilder(gb, x, z, (level % 4) * 0.35 - 0.5);
   b.box(0.9, 0.9, 0.9, 0, 0.0, 0, [34, 32, 36]);       // plinth
   b.box(0.7, 1.15, 0.7, 0, 0.9, 0, [26, 24, 28]);      // column
   b.box(0.78, 0.06, 0.78, 0, 2.05, 0, [58, 54, 60]);   // cap
   // two reels (flat cylinders) on the cap, read as tape spools
   b.cylinder(0.24, 0.09, -0.18, 2.12, 0, [150, 44, 40]);
   b.cylinder(0.24, 0.09, 0.18, 2.12, 0, [150, 44, 40]);
-  // slot of cold light
-  gbEmiss.box(0.5, 0.05, 0.08, (site.cx + 0.5) * CELL, 1.55, (site.cz + 0.5) * CELL, [180, 220, 255]);
+  // slot of cold light at the read-out
+  gbEmiss.box(0.5, 0.05, 0.08, x, 1.55, z, [180, 220, 255]);
+  // beacon: a tall, thin column of light rising out of the cap — the guidance
+  // cue. Two nested boxes so it reads as volumemetric-ish through fog.
+  gbEmiss.box(0.22, 5.4, 0.22, x, 2.1, z, [150, 205, 255]);
+  gbEmiss.box(0.5, 0.16, 0.5, x, 4.75, z, [210, 235, 255]);
+}
+
+// A puzzle key: a squat breaker-style pedestal with a keyed socket and a warm
+// lamp. Deliberately lower and warmer than the cold objective beacons so the
+// two systems never read as the same thing — the nodes are waypoints, the keys
+// are locks. Once collected the mesh is hidden (main.js removes the
+// interactable), leaving the socket dark.
+function buildPuzzleNode(gb, gbEmiss, pz, level) {
+  const x = (pz.cx + 0.5) * CELL, z = (pz.cz + 0.5) * CELL;
+  const b = makeShiftBuilder(gb, x, z, (level % 3) * 0.4 - 0.4);
+  b.box(0.7, 0.5, 0.7, 0, 0.0, 0, [32, 30, 34]);        // squat plinth
+  b.box(0.52, 0.5, 0.52, 0, 0.5, 0, [24, 22, 26]);       // breaker body
+  b.box(0.6, 0.06, 0.6, 0, 1.03, 0, [56, 52, 58]);       // cap
+  // a keyed socket: a shallow hexagonal-ish well with a bright key blank
+  b.box(0.2, 0.16, 0.2, 0, 1.12, 0, [18, 16, 20]);
+  gbEmiss.box(0.1, 0.12, 0.1, x, 1.14, z, [210, 190, 130]); // warm key glow
+  // a small amber tab light on the body, matching the lamp pool
+  gbEmiss.box(0.1, 0.04, 0.05, x + 0.28, 0.72, z, [255, 190, 110]);
+}
+
+// The hidden cache: a small archive case — a dark cabinet with a single drawer
+// pulled open and a cold reading lamp, plus a spill of tape reels. Deliberately
+// unlike the objective nodes so a player who stumbles on it knows it is a
+// secret, not a goal.
+function buildLoreCache(gb, gbEmiss, cache) {
+  const x = (cache.cx + 0.5) * CELL, z = (cache.cz + 0.5) * CELL;
+  const b = makeShiftBuilder(gb, x, z, 0.4);
+  b.box(0.5, 0.95, 0.4, 0, 0.0, 0, [22, 20, 24]);      // cabinet base
+  b.box(0.54, 0.06, 0.44, 0, 0.98, 0, [40, 36, 40]);   // top
+  // drawer slid open toward the viewer
+  b.box(0.46, 0.12, 0.3, 0, 0.62, 0.18, [30, 27, 30]);
+  b.box(0.4, 0.02, 0.24, 0, 0.68, 0.18, [120, 108, 84]); // papers inside
+  // a few loose reels on the top
+  b.cylinder(0.13, 0.06, -0.12, 1.03, 0.02, [150, 44, 40]);
+  b.cylinder(0.13, 0.06, 0.14, 1.03, -0.06, [46, 120, 140]);
+  // cold reading lamp — a small emissive panel above the drawer
+  gbEmiss.box(0.3, 0.03, 0.03, x, 1.35, z, [210, 230, 255]);
 }
 
 // The exit: a standing archive doorframe with a cold bright mouth. Locked until
@@ -678,6 +797,7 @@ export class WorldManager {
       notes: group.userData.notes,
       interactables: group.userData.interactables || [],
       lightMesh: group.getObjectByName('lightpanels'),
+      hazards: group.getObjectByName('hazards'),
     });
     for (const d of group.userData.doors) this.doorIndex.set(`${d.cx},${d.cz},${d.dir}`, d);
     // flush queued morphs for this chunk
@@ -749,7 +869,11 @@ export class WorldManager {
   removeInteractable(id) {
     for (const chunk of this.chunks.values()) {
       const i = chunk.notes.findIndex((n) => n.id === id);
-      if (i >= 0) { chunk.notes.splice(i, 1); return true; }
+      if (i >= 0) chunk.notes.splice(i, 1);
+      // loot also has a crate mesh — hide it so the pickup visibly vanishes
+      const m = chunk.group.getObjectByName(`lootmesh:${id}`);
+      if (m) m.visible = false;
+      if (i >= 0 || m) return true;
     }
     return false;
   }

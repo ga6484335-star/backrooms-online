@@ -124,6 +124,12 @@ export class MobileControls {
       if (this.onFlash) { this.onFlash(); fb.classList.toggle('on'); }
     }, { passive: false });
 
+    const flb = document.getElementById('mb-flare');
+    if (flb) flb.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      if (this.onFlare) this.onFlare();
+    }, { passive: false });
+
     document.getElementById('mb-jump').addEventListener('touchstart', (e) => {
       e.preventDefault();
       this.player.jump();

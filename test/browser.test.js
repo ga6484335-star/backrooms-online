@@ -71,7 +71,7 @@ async function main() {
     '--disable-dev-shm-usage',
     `--remote-debugging-port=${CDP_PORT}`, '--window-size=1280,800',
     '--autoplay-policy=no-user-gesture-required',
-    `http://127.0.0.1:${PORT}/`,
+    `http://127.0.0.1:${PORT}/?skipintro=1`,
   ], { stdio: 'pipe' });
   chrome.stderr.on('data', () => {});
 
@@ -154,7 +154,12 @@ async function main() {
     if (doors.length > 0) {
       const d = nearDoors[0];
       await cdp.eval(`window.__dbg.teleport(${d.x + 1.5}, ${d.z + 1.5}, 0)`);
-      const near = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.nearInteractable())`) || 'null');
+      let near = null;
+      for (let i = 0; i < 40; i++) {
+        near = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.nearInteractable())`) || 'null');
+        if (near) break;
+        await sleep(150);
+      }
       check(!!near, 'door in interact range after teleport');
       const before = (near && near.data && near.data.locked) || false;
       const hitType = await cdp.eval(`window.__dbg.interact()`);
@@ -171,7 +176,14 @@ async function main() {
         // find the key for this door and pick it up via interactor progression
         const keyId = 'key:' + d.key;
         // teleport-walk around the chunk to find a key item near a locked door
-        const gotLocked = await cdp.eval(`window.__dbg.prompt()`);
+        // the prompt element only refreshes on a real rAF frame (throttled
+        // headless), so poll it instead of reading once after a 200ms sleep
+        let gotLocked = null;
+        for (let i = 0; i < 40; i++) {
+          gotLocked = await cdp.eval(`window.__dbg.prompt()`);
+          if (/LOCKED|NEED|KEY/.test(String(gotLocked))) break;
+          await sleep(150);
+        }
         check(/LOCKED|NEED|KEY/.test(String(gotLocked)), 'locked door prompt shows LOCKED: ' + gotLocked);
       } else {
         // the door may already be open when we toggle it; a valid interaction
@@ -204,10 +216,14 @@ async function main() {
     await cdp.eval(`window.__dbg.teleport(window.__dbg.pos()[0] + 2, window.__dbg.pos()[2] + 2, 3.0)`); // move + look away (yaw=3≈facing -x)
     await cdp.eval(`window.__dbg.step(0.05)`);
     await cdp.eval(`window.__dbg.placeNote(0, 0)`); // note directly under the player (0m beats any door)
-    await sleep(400);
+    let placedRaw = null;
+    for (let i = 0; i < 40; i++) {
+      placedRaw = await cdp.eval(`window.__dbg.nearInteractable() && window.__dbg.nearInteractable().type`);
+      if (placedRaw === 'note') break;
+      await sleep(150);
+    }
     const dbgNotes = await cdp.eval(`JSON.stringify(window.__dbg.placedNotes ? window.__dbg.placedNotes().slice(-1) : null)`);
     console.log('  [info] placedNotes:', String(dbgNotes).slice(0, 120));
-    const placedRaw = await cdp.eval(`Math.hypot(1.5,1.5) < 3.2 ? window.__dbg.nearInteractable() && window.__dbg.nearInteractable().type : null`);
     if (placedRaw !== 'note') {
       console.log('  [info] note clue- what nearInteractable saw:', placedRaw);
     }
@@ -277,6 +293,40 @@ async function main() {
     const pauseClosed = await cdp.eval(`document.getElementById('pause-overlay').classList.contains('hidden')`);
     check(pauseClosed === true, 'pause closed after settings BACK');
 
+    // 10e. CASE FILE journal: records story fragments, opens, closes
+    const jHasBtn = await cdp.eval(`!!document.getElementById('btn-hud-journal')`);
+    check(jHasBtn === true, 'case-file button exists in HUD');
+    let jCount = 0;
+    for (let i = 0; i < 20; i++) {
+      jCount = await cdp.eval(`window.__dbg.journalCount()`);
+      if (jCount > 0) break;
+      await sleep(150);
+    }
+    check(jCount > 0, 'journal recorded arrival narration (' + jCount + ' entries)');
+    await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyJ'}))`);
+    await sleep(250);
+    const jOpen = await cdp.eval(`window.__dbg.journalOpen()`);
+    check(jOpen === true, 'J opens the case file');
+    const jText = await cdp.eval(`window.__dbg.journalText() || ''`);
+    check(/LEVEL\s+\d/.test(jText), 'case file renders the level heading');
+    check(jText.length > 0, 'case file shows recorded fragments');
+    const jNewCleared = await cdp.eval(`window.__dbg.journalHasNew() === false`);
+    check(jNewCleared === true, 'opening the case file clears the unread marker');
+    await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'Escape'}))`);
+    await sleep(200);
+    const jClosed = await cdp.eval(`window.__dbg.journalOpen() === false`);
+    check(jClosed === true, 'Esc closes the case file');
+    // reachable from the pause menu too
+    await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'Escape'}))`);
+    await sleep(250);
+    await cdp.eval(`document.getElementById('btn-pause-journal').click()`);
+    await sleep(250);
+    const jFromPause = await cdp.eval(`window.__dbg.journalOpen() === true && document.getElementById('pause-overlay').classList.contains('hidden')`);
+    check(jFromPause === true, 'pause menu opens the case file');
+    await cdp.eval(`document.getElementById('journal-close-btn').click()`);
+    await sleep(200);
+    check(await cdp.eval(`window.__dbg.journalOpen() === false`), 'CLOSE FILE dismisses the journal');
+
     // 11. SIT / STAND state machine: sit → stand → move; never stuck
     await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyC'}))`);
     await sleep(300);
@@ -286,29 +336,37 @@ async function main() {
     await sleep(300);
     const standing = await cdp.eval(`window.__dbg.state().sitting === false`);
     check(standing === true, 'sit toggles back to standing');
-    // sit again then auto-stand by walking
+    // sit again then auto-stand by walking. rAF is throttled headless, so force
+    // update frames rather than trusting a 400ms wall-clock window — otherwise
+    // the player stays seated and the jump check below fails as a side effect.
     await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyC'}))`);
     await sleep(200);
     await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyW'}))`);
-    await sleep(400);
+    let autoStand = false;
+    for (let i = 0; i < 20; i++) {
+      await cdp.eval(`window.__dbg.step(0.05)`);
+      if (await cdp.eval(`window.__dbg.state().sitting === false`)) { autoStand = true; break; }
+    }
     await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keyup', {code:'KeyW'}))`);
-    const autoStand = await cdp.eval(`window.__dbg.state().sitting === false`);
     check(autoStand === true, 'walking auto-stands from sit');
 
     // 12. JUMP: grounded → airborne → lands; Space mid-air must NOT double height
-    const jumpTest = await cdp.eval(`(async () => {
+    // Physics is stepped deterministically (rAF/fixed-timestep integration is
+    // unreliable in headless, which previously made this assertion flaky).
+    const jumpTest = await cdp.eval(`(() => {
+      // settle first: auto-standing from sit can leave the player mid-settle
+      for (let i = 0; i < 20 && !window.__dbg.state().grounded; i++) window.__dbg.step(0.02);
       const s0 = window.__dbg.state();
       if (!s0.grounded) return { ok: false, why: 'not grounded at start' };
       window.dispatchEvent(new KeyboardEvent('keydown', {code:'Space'}));
       let maxY = 0, airborne = false;
-      for (let i = 0; i < 12; i++) {
-        await new Promise(r => setTimeout(r, 70));
+      for (let i = 0; i < 60; i++) {
+        window.__dbg.step(0.02);
         const s = window.__dbg.state();
         if (!s.grounded) airborne = true;
         if (s.yOff > maxY) maxY = s.yOff;
-        if (i === 2) window.dispatchEvent(new KeyboardEvent('keydown', {code:'Space'})); // mid-air: must be ignored
+        if (i === 4) window.dispatchEvent(new KeyboardEvent('keydown', {code:'Space'})); // mid-air: must be ignored
       }
-      await new Promise(r => setTimeout(r, 700));
       const end = window.__dbg.state();
       const landed = end.grounded && end.yOff === 0;
       // v=3.6, g=13.5 → apex ≈ 0.48m; a double jump would exceed 0.9m
@@ -316,17 +374,70 @@ async function main() {
     })()`);
     check(jumpTest && jumpTest.ok === true, 'jump works: airborne, lands, no double-jump ' + JSON.stringify(jumpTest));
 
-    // 13. flashlight toggle via F
-    const flashTest = await cdp.eval(`(async () => {
-      window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyF'}));
-      await new Promise(r => setTimeout(r, 150));
-      const on = window.__dbg.flash();
-      window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyF'}));
-      await new Promise(r => setTimeout(r, 150));
-      const off = window.__dbg.flash();
-      return { on: on && on.on, off: off && !off.on };
+    // 12b. DEATH: must never black-screen. The death overlay has to be visible
+    // above the fade, the timer must run down, and [R] must restore control.
+    const deathFlow = await cdp.eval(`(async () => {
+      const wait = (ms) => new Promise(r => setTimeout(r, ms));
+      window.__dbg.die();
+      await wait(1000); // after the brief blackout punch
+      const d1 = window.__dbg.death();
+      const zFade = getComputedStyle(document.getElementById('fade')).zIndex;
+      const zDeath = getComputedStyle(document.getElementById('death-overlay')).zIndex;
+      const fadeCleared = document.getElementById('fade').classList.contains('clear');
+      const sub1 = document.getElementById('death-sub').textContent;
+      return { dead: d1.dead, overlay: d1.overlay, fadeCleared, zFade: +zFade, zDeath: +zDeath, sub1 };
     })()`);
-    check(flashTest && flashTest.on === true && flashTest.off === true, 'flashlight toggles on/off with F');
+    check(deathFlow.dead === true, 'death sets the dead state');
+    check(deathFlow.overlay === true, 'death screen is visible (never a black screen)');
+    check(deathFlow.fadeCleared === true, 'blackout lifts so the death card shows');
+    check(deathFlow.zDeath > deathFlow.zFade, 'death overlay stacks above the fade (' + deathFlow.zDeath + ' > ' + deathFlow.zFade + ')');
+    // skip the 6s wait deterministically and respawn via the [R] key
+    await cdp.eval(`window.__dbg._tickDead(6.5)`);
+    await sleep(200);
+    const beforeR = await cdp.eval(`JSON.stringify(window.__dbg.death())`);
+    await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyR'}))`);
+    await sleep(300);
+    const afterR = await cdp.eval(`JSON.stringify(window.__dbg.death())`);
+    check(JSON.parse(beforeR).dead === true && JSON.parse(afterR).dead === false, 'R respawns after the timer (before ' + beforeR + ' → after ' + afterR + ')');
+    const respawnPos = await cdp.eval(`JSON.stringify(window.__dbg.pos())`);
+    check(JSON.parse(respawnPos).every((n) => Number.isFinite(n)), 'respawn places the player at a finite position: ' + respawnPos);
+
+    const lighting = await cdp.eval(`(async () => {
+      // face -X so the wall/panel directly ahead is inside the beam
+      const p = window.__dbg.player;
+      window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyF'}));
+      await new Promise(r => setTimeout(r, 450));
+      const on = window.__dbg.flash();
+      // walk toward -X and sample world brightness: with the light on and the
+      // beam lagging the camera, the frame should be brighter than lights-out
+      const sample = () => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(() => {
+        const c = document.getElementById('gl');
+        const g = c.getContext('webgl2') || c.getContext('webgl');
+        if (!g) return res(null);
+        const px = new Uint8Array(4 * 400);
+        g.readPixels((g.drawingBufferWidth/2|0)-10, (g.drawingBufferHeight/2|0)-10, 20, 20, g.RGBA, g.UNSIGNED_BYTE, px);
+        let s = 0; for (let i = 0; i < 400; i++) s += px[i*4] + px[i*4+1] + px[i*4+2];
+        res(s);
+      })));
+      const lit = await sample();
+      window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyF'}));
+      await new Promise(r => setTimeout(r, 450));
+      const off = window.__dbg.flash();
+      const dark = await sample();
+      const cone = window.__dbg.flashlightCone();
+      return { on: on && on.on, off: off && !off.on, cone, lit, dark, spoke: window.__dbg.voiceSupported() };
+    })()`);
+    check(lighting && lighting.on === true && lighting.off === true, 'flashlight toggles on/off with F');
+    check(lighting && lighting.cone && lighting.cone.angle > 0.1 && lighting.cone.angle < 0.35,
+      'flashlight beam is a tight cone, not a wide flap (' + JSON.stringify(lighting.cone && lighting.cone.angle) + ')');
+    check(lighting && lighting.cone && lighting.cone.spillIntensity === 0,
+      'flashlight has no wide spill wash (no fake yellow halo)');
+    check(lighting && lighting.cone && lighting.cone.decay === 2,
+      'flashlight uses physical (inverse-square) falloff');
+    check(lighting && lighting.cone && lighting.cone.color && Math.abs(lighting.cone.color[0] - lighting.cone.color[2]) < 0.05,
+      'flashlight is neutral white, not a warm tint');
+    check(lighting && lighting.cone && lighting.cone.beamMesh === false,
+      'flashlight is pure light — no translucent cone/overlay mesh');
 
     // console errors? (filter out expected WebGL-unavailable noise when headless
     // has no GL — the app surviving is the actual assertion)

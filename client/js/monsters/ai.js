@@ -71,8 +71,9 @@ export class MonsterSystem {
     this.director = { distance: 0, timePlayed: 0, deaths: 0, players: 1, level: 0, objectives: 0 };
     this.encounters = 0;      // total monsters spawned (guarantee+escalation)
     this.encounterAgo = 0;    // seconds since the last spawn
-    this.tension = 0;         // spikes from objective/exit events (progression)
+    this.tension = 0;         // spikes from objective/exit/story events
     this._tensionDecay = 0.05;
+    this.storySpawnPending = null; // {type,x,z} queued by a story event
 
     this.hallucTimer = 50 + Math.random() * 60;
     this._visWarnings = new Set(); // warn-once per mesh class
@@ -84,7 +85,35 @@ export class MonsterSystem {
   notifyDeath() {
     this.director.deaths++;
     this.pacing = 'cooldown';
-    this.pacingT = 25 + Math.random() * 25;
+    this.pacingT = 18 + Math.random() * 18;
+  }
+
+  // a story event wants a specific creature to appear, now, at a place that
+  // reads as a surprise: queued and spawned on the next host tick, avoiding
+  // the player's view cone. Used when objectives complete / the exit opens /
+  // a level transition lands, so encounters land on beats instead of at random.
+  stageEncounter(type, x, z) {
+    if (type && !MONSTER_TYPES[type]) return false; // null = director's choice
+    this.storySpawnPending = { type: type || null, x, z };
+    return true;
+  }
+
+  // pick from the current level's pool, preferring a lethal species
+  pickStagedType(preferLethal = true) {
+    const pool = LEVEL_POOLS[this.world.level] || LEVEL_POOLS[0];
+    const active = [...this.monsters.values()].filter((m) => !m.private);
+    const countOf = (t) => active.filter((m) => m.type === t).length;
+    const valid = (t) => {
+      const def = MONSTER_TYPES[t];
+      if (!def) return false;
+      if (def.levelOnly !== undefined && def.levelOnly !== this.world.level) return false;
+      if (def.farSpawn) return false;
+      return countOf(t) < (CAPS[t] || 1);
+    };
+    let cands = pool.filter((t) => valid(t) && (!preferLethal || MONSTER_TYPES[t].lethal));
+    if (!cands.length) cands = pool.filter(valid);
+    if (!cands.length) return null;
+    return cands[(Math.random() * cands.length) | 0];
   }
 
   // ------------------------------------------------------------- spawning
@@ -92,46 +121,77 @@ export class MonsterSystem {
     this.pacingT -= dt;
     this.encounterAgo += dt;
 
+    // a staged story encounter outranks the pacing machine — it always fires
+    if (this.storySpawnPending) {
+      const s = this.storySpawnPending;
+      this.storySpawnPending = null;
+      const type = s.type || this.pickStagedType();
+      if (type) {
+        const watchers = [{ x: player.pos.x, z: player.pos.z, yaw: player.yaw },
+          ...(players || []).map((p) => ({ x: p.x, z: p.z, yaw: p.yaw }))];
+        const px = (s.x !== undefined) ? s.x : player.pos.x;
+        const pz = (s.z !== undefined) ? s.z : player.pos.z;
+        const spawned = this.spawnPlaced(type, px, pz, watchers);
+        if (spawned) {
+          const pack = Math.min(3, MONSTER_TYPES[type].pack || 1);
+          for (let i = 1; i < pack; i++) {
+            const cell = this.worldMgr.monstersSpawnCell(spawned.x, spawned.z);
+            this.spawnMonster(type, (cell[0] + 0.5) * CELL, (cell[1] + 0.5) * CELL);
+          }
+          this.encounters++;
+          this.encounterAgo = 0;
+          this.pacing = 'encounter';
+          this.pacingT = 30 + Math.random() * 25;
+          this.audio.monsterVoice(type, spawned.x, 1.5, spawned.z, 1.1);
+          return;
+        }
+      }
+    }
+
     // dwell tracking: lingering in one cell raises danger
     const cc = `${Math.floor(player.pos.x / CELL)},${Math.floor(player.pos.z / CELL)}`;
     if (cc === this.dwellCell) this.dwellT += dt; else { this.dwellCell = cc; this.dwellT = 0; }
+
+    // hoisted: shared by every pacing case (declaring it inside one case would
+    // leave it in the temporal dead zone when a later case is entered directly)
+    const playT = this.director.timePlayed || 0;
 
     switch (this.pacing) {
       case 'quiet':
         if (this.pacingT <= 0) {
           this.pacing = 'uneasy';
-          // (playT hoisted above)
-          this.pacingT = playT < 90 ? 12 + Math.random() * 10 : playT < 240 ? 8 + Math.random() * 7 : 5 + Math.random() * 4;
+          this.pacingT = playT < 90 ? 7 + Math.random() * 7 : playT < 240 ? 5 + Math.random() * 5 : 3 + Math.random() * 3;
         }
         break;
       case 'uneasy':
-        const playT = this.director.timePlayed || 0;
         if (this.pacingT <= 0) {
           const active = [...this.monsters.values()].filter((m) => !m.private);
           const playerCount = this.director.players || (1 + (players ? players.length : 0));
           const darkness = 1 - this.getLightAt(player.pos.x, player.pos.z);
-          const noise = player.anim === 'run' ? 0.15 : player.anim === 'walk' ? 0.05 : 0;
-          const dwell = Math.min(0.25, this.dwellT / 120 * 0.25);
-          const crowd = Math.min(0.15, playerCount * 0.03);
+          const noise = player.anim === 'run' ? 0.2 : player.anim === 'walk' ? 0.07 : 0;
+          const dwell = Math.min(0.3, this.dwellT / 90 * 0.3);
+          const crowd = Math.min(0.18, playerCount * 0.035);
           // distance-based escalation: the deeper you travel, the hungrier it gets
           const dist = this.director.distance;
-          const depthBonus = dist < 120 ? -0.25 : dist < 400 ? 0 : Math.min(0.2, (dist - 400) / 2000);
+          const depthBonus = dist < 60 ? -0.2 : dist < 400 ? 0 : Math.min(0.22, (dist - 400) / 2000);
           // progression reactivity: the world gets hungrier as the level deepens,
           // as objectives are read, and for a while after an escalated event.
-          const levelBonus = Math.min(0.18, (this.world.level || 0) * 0.028);
+          const levelBonus = Math.min(0.22, (this.world.level || 0) * 0.034);
           const objProgress = this.director.objectives || 0;
-          const objBonus = objProgress * 0.12;
-          const tension = Math.min(0.3, (this.tension || 0) * 0.06);
-          let chanceOf = 0.35 + darkness * 0.2 + noise + dwell + crowd + depthBonus
-            + levelBonus + objBonus + tension - active.length * 0.25;
-          // guaranteed encounters: past ~100m the director WILL bring the
+          const objBonus = objProgress * 0.18;
+          const tension = Math.min(0.4, (this.tension || 0) * 0.07);
+          // baseline encounter chance is deliberately higher than a slow burn:
+          // the world should feel dangerous, with a lull after each encounter
+          // rather than long empty stretches.
+          let chanceOf = 0.6 + darkness * 0.22 + noise + dwell + crowd + depthBonus
+            + levelBonus + objBonus + tension - active.length * 0.16;
+          // guaranteed encounters: past ~60m the director WILL bring the
           // first one; afterwards the chance creeps up the longer it's quiet
           let guaranteed = false;
-          if (this.encounters === 0 && (dist > 90 || this.director.timePlayed > 35)) { chanceOf = 1; guaranteed = true; }
-          else if (dist > 120 && this.encounterAgo > 55) chanceOf = Math.min(1, chanceOf + (this.encounterAgo - 55) / 80);
+          if (this.encounters === 0 && (dist > 55 || this.director.timePlayed > 20)) { chanceOf = 1; guaranteed = true; }
+          else if (this.encounterAgo > 38) chanceOf = Math.min(1, chanceOf + (this.encounterAgo - 38) / 45);
           // dynamic cap: more players and more time spent = more monsters
-          // (playT hoisted above)
-          const globalCap = Math.min(14, (playT < 90 ? 4 : playT < 240 ? 5 : playT < 420 ? 7 : 9) + playerCount);
+          const globalCap = Math.min(16, (playT < 90 ? 5 : playT < 240 ? 6 : playT < 420 ? 8 : 10) + playerCount);
           // first-encounter guarantee must not be eaten by a lingering idle
           // silhouette: dormant mood species don't count against the cap there
           const blockers = guaranteed
@@ -144,17 +204,17 @@ export class MonsterSystem {
               const def = MONSTER_TYPES[t];
               if (!def) return false;
               if (def.levelOnly !== undefined && def.levelOnly !== this.world.level) return false;
-              if (dist < 120 && def.lethal) return false; // grace period
+              if (dist < 70 && def.lethal) return false; // grace period
               if (def.farSpawn && dist < 200) return false; // deep-world creatures
               return countOf(t) < (CAPS[t] || 1);
             };
             // rarity-weighted pick: roll against def.rarity, repick on failure
             let type = null;
-            for (let tries = 0; tries < 6 && !type; tries++) {
+            for (let tries = 0; tries < 7 && !type; tries++) {
               const cand = pool[(Math.random() * pool.length) | 0];
               if (!valid(cand)) continue;
-              const r = guaranteed ? 1 : (MONSTER_TYPES[cand].rarity ?? 0.1);
-              if (Math.random() < r * 3.2) type = cand; // rarity 0.02 → 6.4%/try
+              const r = guaranteed ? 1 : (MONSTER_TYPES[cand].rarity ?? 0.15);
+              if (Math.random() < r * 4.0) type = cand; // more generous than before
             }
             const watchers = [{ x: player.pos.x, z: player.pos.z, yaw: player.yaw },
               ...(players || []).map((p) => ({ x: p.x, z: p.z, yaw: p.yaw }))];
@@ -172,28 +232,28 @@ export class MonsterSystem {
                 this.encounters++;
                 this.encounterAgo = 0;
                 this.pacing = 'encounter';
-                this.pacingT = 40 + Math.random() * 40;
+                this.pacingT = 24 + Math.random() * 24;
                 break;
               }
             }
           }
           this.pacing = 'cooldown';
           // (playT hoisted above)
-          this.pacingT = playT < 90 ? 14 + Math.random() * 16 : playT < 240 ? 9 + Math.random() * 11 : 6 + Math.random() * 7;
+          this.pacingT = playT < 90 ? 8 + Math.random() * 9 : playT < 240 ? 5 + Math.random() * 6 : 3 + Math.random() * 4;
         }
         break;
       case 'encounter':
         if (this.pacingT <= 0 || ![...this.monsters.values()].some((m) => !m.private)) {
           this.pacing = 'cooldown';
           // (playT hoisted above)
-          this.pacingT = playT < 90 ? 14 + Math.random() * 16 : playT < 240 ? 9 + Math.random() * 11 : 6 + Math.random() * 7;
+          this.pacingT = playT < 90 ? 8 + Math.random() * 9 : playT < 240 ? 5 + Math.random() * 6 : 3 + Math.random() * 4;
         }
         break;
       case 'cooldown':
         if (this.pacingT <= 0) {
           this.pacing = 'quiet';
           // (playT hoisted above)
-          this.pacingT = playT < 90 ? 12 + Math.random() * 10 : playT < 240 ? 8 + Math.random() * 7 : 5 + Math.random() * 4;
+          this.pacingT = playT < 90 ? 7 + Math.random() * 7 : playT < 240 ? 5 + Math.random() * 5 : 3 + Math.random() * 3;
         }
         break;
     }

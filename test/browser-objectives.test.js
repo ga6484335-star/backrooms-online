@@ -16,6 +16,20 @@ function check(cond, label) {
   else { console.log('  \u2718 FAILED: ' + label); failures++; }
 }
 
+// Headless rAF is throttled, so the chunk stream + interact detection can land
+// later than a fixed sleep assumes (and the lag varies run to run, which made
+// this suite flaky). Poll until the expected interactable is in reach instead.
+async function waitNear(cdp, type, ms = 8000) {
+  const t0 = Date.now();
+  let last = null;
+  while (Date.now() - t0 < ms) {
+    last = await cdp.eval(`(() => { const it = window.__dbg.nearInteractable(); return it ? it.type : null; })()`);
+    if (last === type) return last;
+    await sleep(120);
+  }
+  return last;
+}
+
 async function getWsUrl() {
   for (let i = 0; i < 30; i++) {
     try {
@@ -61,7 +75,7 @@ async function main() {
     '--headless=new', '--no-sandbox', '--disable-gpu-sandbox',
     '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-dev-shm-usage',
     `--remote-debugging-port=${CDP_PORT}`, '--window-size=1280,800', '--autoplay-policy=no-user-gesture-required',
-    `http://127.0.0.1:${PORT}/`,
+    `http://127.0.0.1:${PORT}/?skipintro=1`,
   ], { stdio: 'pipe' });
   chrome.stderr.on('data', () => {});
 
@@ -109,11 +123,36 @@ async function main() {
     check(cine === true, 'story intro cinematic plays on arrival');
     await cdp.eval(`window.__dbg.skipCinematic()`);
 
+    // the cold open is a real, skippable state (exercised without running the
+    // full 68s film): force it on, confirm the overlay + phase, then skip out
+    await cdp.eval(`window.__dbg.startOpening()`);
+    check((await cdp.eval(`window.__dbg.openingActive()`)) === true, 'cold open starts');
+    check((await cdp.eval(`window.__dbg.state().gameState`)) === 'opening', 'cold open switches game state');
+    check((await cdp.eval(`!document.getElementById('opening-overlay').classList.contains('hidden')`)) === true,
+      'cold-open overlay visible');
+    check((await cdp.eval(`window.__dbg.openingPhase()`)) === 'street', 'cold open begins on the street');
+    await sleep(400);
+    await cdp.eval(`window.__dbg.skipOpening()`);
+    check((await cdp.eval(`window.__dbg.openingActive()`)) === false, 'cold open skips cleanly');
+    check((await cdp.eval(`window.__dbg.state().gameState`)) === 'playing', 'control returns after the cold open');
+    await cdp.eval(`window.__dbg.skipCinematic()`);
+
+    // level transitions are their own state (level 5 = the lift)
+    await cdp.eval(`window.__dbg.startTransition(5)`);
+    check((await cdp.eval(`window.__dbg.transitionKind()`)) === 'elevator', 'level 5 transition is the lift');
+    check((await cdp.eval(`window.__dbg.state().gameState`)) === 'transition', 'transition switches game state');
+    await cdp.eval(`window.__dbg.skipTransition()`);
+    check((await cdp.eval(`window.__dbg.state().gameState`)) === 'playing', 'control returns after the transition');
+    await cdp.eval(`window.__dbg.skipCinematic()`);
+
+    // the objective compass points at the next goal
+    check((await cdp.eval(`window.__dbg.compass()`)) !== null, 'objective compass queryable');
+    await cdp.eval(`window.__dbg.skipCinematic()`);
+
     // walk to the first site and activate it via the real interact path
     const s0 = siteArr[0];
     await cdp.eval(`window.__dbg.teleport(${s0.x}, ${s0.z})`);
-    await sleep(1400); // let the chunk stream + interact detection run
-    const near = await cdp.eval(`(() => { const it = window.__dbg.nearInteractable(); return it ? it.type : null; })()`);
+    const near = await waitNear(cdp, 'site');
     check(near === 'site', `near objective site after teleport (${near})`);
     const acted = await cdp.eval(`window.__dbg.interact()`);
     check(acted === 'site', `interact activated the site (${acted})`);
@@ -121,10 +160,29 @@ async function main() {
     check(obj.activated.length === 1, `objective tracked (${obj.activated.length}/3)`);
     check(obj.complete === false, 'not complete after one site');
 
+    // ---- hidden lore cache: optional secret, deterministic, net-independent
+    const cache = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.cachePos())`));
+    check(!!cache && cache.key.startsWith('cache:'), `hidden cache exists (${cache.label})`);
+    check(typeof cache.lore.body === 'string' && cache.lore.body.length > 0, 'cache carries a lore fragment');
+    check((await cdp.eval(`window.__dbg.cacheFound()`)).length === 0, 'cache starts unfound');
+    await cdp.eval(`window.__dbg.teleport(${cache.x}, ${cache.z})`);
+    const nearCache = await waitNear(cdp, 'cache');
+    check(nearCache === 'cache', `near hidden cache after teleport (${nearCache})`);
+    const actedCache = await cdp.eval(`window.__dbg.interact()`);
+    check(actedCache === 'cache', `interact opened the cache (${actedCache})`);
+    check((await cdp.eval(`window.__dbg.loreOpen()`)) === true, 'lore overlay opens');
+    const shown = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.loreShown())`));
+    check(!!shown && shown.body.length > 0, `lore text rendered: "${String(shown.title).slice(0, 30)}"`);
+    check((await cdp.eval(`window.__dbg.cacheFound()`)).length === 1, 'cache recorded as found');
+    await cdp.eval(`window.__dbg.closeLore()`);
+    check((await cdp.eval(`window.__dbg.loreOpen()`)) === false, 'lore overlay closes');
+    check((await cdp.eval(`window.__dbg.exitUnlocked()`)) === false, 'finding a secret does not unlock the exit');
+    await cdp.eval(`window.__dbg.skipCinematic()`);
+
     // exit must be SEALED before objectives are done
     const exit = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.exitPos())`));
     await cdp.eval(`window.__dbg.teleport(${exit.x}, ${exit.z})`);
-    await sleep(1400);
+    await sleep(900); // a locked exit is not offered as an interactable at all
     await cdp.eval(`window.__dbg.interact()`);
     check((await cdp.eval(`window.__dbg.level()`)) === 5, 'sealed exit does not advance the level');
     check((await cdp.eval(`window.__dbg.exitUnlocked()`)) === false, 'exit still locked with objectives remaining');
@@ -132,28 +190,129 @@ async function main() {
     // finish the objectives on the rest of the sites via the real path
     for (let i = 1; i < siteArr.length; i++) {
       await cdp.eval(`window.__dbg.teleport(${siteArr[i].x}, ${siteArr[i].z})`);
-      await sleep(900);
+      await waitNear(cdp, 'site');
       await cdp.eval(`window.__dbg.interact()`);
     }
+    check((await cdp.eval(`window.__dbg.exitUnlocked()`)) === false,
+      'exit stays sealed after the nodes — the lock remains');
+
+    // ---- the puzzle lock: deterministic keys that seal the exit
+    const pz = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.puzzlePos())`));
+    const pzGoal = await cdp.eval(`window.__dbg.puzzleGoal()`);
+    check(pz.length === pzGoal, `level lays out ${pzGoal} lock keys (${pz.length})`);
+    check(pz.every((p) => p.key.startsWith('pz:')), 'lock keys are namespaced');
+    check((await cdp.eval(`JSON.stringify(window.__dbg.objectives().puzzle)`)) === '[]', 'no keys collected yet');
+    // collect all but the last via the real interact path
+    for (let i = 0; i < pz.length - 1; i++) {
+      await cdp.eval(`window.__dbg.teleport(${pz[i].x}, ${pz[i].z})`);
+      const nearPz = await waitNear(cdp, 'puzzle');
+      check(nearPz === 'puzzle', `near lock key after teleport (${nearPz})`);
+      const actedPz = await cdp.eval(`window.__dbg.interact()`);
+      check(actedPz === 'puzzle', `interact turned the key (${actedPz})`);
+    }
+    check((await cdp.eval(`window.__dbg.exitUnlocked()`)) === false, 'exit still sealed with one key left');
+    const lastKey = pz[pz.length - 1];
+    await cdp.eval(`window.__dbg.teleport(${lastKey.x}, ${lastKey.z})`);
+    await waitNear(cdp, 'puzzle');
+    await cdp.eval(`window.__dbg.interact()`);
+    check(JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.objectives())`)).puzzleDone === true,
+      'puzzle lock reports complete');
     const unlocked = await cdp.eval(`window.__dbg.exitUnlocked()`);
-    check(unlocked === true, 'exit unlocks after all objectives');
+    check(unlocked === true, 'exit unlocks after objectives + the lock');
     check(JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.objectives())`)).complete === true,
       'objectives report complete');
 
+    // level 5's signature hazard is the timed blackout (no cells, just darkness)
+    const hz5 = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.hazard())`));
+    check(hz5.kind === 'lightsout', `level 5 signature hazard is the blackout (${hz5.kind})`);
+    await cdp.eval(`window.__dbg.setElapsed(${16 - 6 + 0.4})`); // inside the active window
+    await sleep(400);
+    check(JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.hazard())`)).active === true,
+      'blackout goes active on its schedule');
+    await cdp.eval(`window.__dbg.setElapsed(0.2)`); // back to clear
+    await cdp.eval(`window.__dbg.skipCinematic()`);
+
     // now the exit advances the party to the story's next level (6)
     await cdp.eval(`window.__dbg.teleport(${exit.x}, ${exit.z})`);
-    await sleep(1200);
+    await waitNear(cdp, 'exit');
     await cdp.eval(`window.__dbg.interact()`);
-    // an epilogue cinematic runs first; skip it so enterLevel executes
-    await sleep(1200);
+    // an epilogue cinematic runs first, then enterLevel(6) fires; tick it
+    // deterministically instead of racing setTimeout-driven skips
+    check((await cdp.eval(`window.__dbg.isHost()`)) === true, 'single player is host (can use the exit)');
+    await cdp.eval(`window.__dbg._tickCinematic(400, 0.2)`);
+    await sleep(600);
     await cdp.eval(`window.__dbg.skipCinematic()`);
-    await sleep(1200);
-    await cdp.eval(`window.__dbg.skipCinematic()`);
+    await cdp.eval(`window.__dbg._tickCinematic(400, 0.2)`);
     await sleep(1500);
     const level6 = await cdp.eval(`window.__dbg.level()`);
     check(level6 === 6, `exit advanced to LEVEL 6 — THE ASCENT (got ${level6})`);
     const back = await cdp.eval(`Boolean(document.querySelector('#objective-title')) && document.getElementById('objective-title').textContent`);
     check(/ASCENT/i.test(String(back)), `HUD reflects the new chapter (${back})`);
+
+    // ---- level signature hazards -----------------------------------------
+    // enterLevel(6) starts level 6's own transition; clear it so the per-frame
+    // hazard update runs (in a real session it ends on its own).
+    await cdp.eval(`window.__dbg.skipTransition()`);
+    await cdp.eval(`window.__dbg.skipCinematic()`);
+    await sleep(300);
+    check((await cdp.eval(`window.__dbg.state().gameState`)) === 'playing', 'control returns on level 6');
+
+    // level 6's hazard is the cascade: timed surge cells with loot on them
+    const hz6 = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.hazard())`));
+    check(hz6.kind === 'surge2', `level 6 signature hazard is the cascade (${hz6.kind})`);
+    const hcells = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.hazardPos())`));
+    check(hcells.length >= 1, `level 6 has hazard cells (${hcells.length})`);
+    const loot = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.lootPos())`));
+    check(loot.length >= 1 && String(loot[0].id).startsWith('loot:'), 'hazard cells hold risk/reward loot');
+
+    // loot is taken through the real interact path (and removed for the party)
+    await cdp.eval(`window.__dbg.teleport(${loot[0].x}, ${loot[0].z})`);
+    const nearLoot = await waitNear(cdp, 'loot');
+    check(nearLoot === 'loot', `near hazard loot after teleport (${nearLoot})`);
+    const actedLoot = await cdp.eval(`window.__dbg.interact()`);
+    check(actedLoot === 'loot', `interact took the loot (${actedLoot})`);
+    check((await cdp.eval(`window.__dbg.lootTakenList()`)).length >= 1, 'loot recorded as taken for the party');
+    await cdp.eval(`window.__dbg.closeLore()`);
+    await cdp.eval(`window.__dbg.skipCinematic()`);
+
+    // ---- flares: consumable light that draws the monsters ------------------
+    // the loot just taken may itself have been a flare, so zero the pocket first
+    check((await cdp.eval(`window.__dbg.setFlares(0)`)) === 0, 'party starts with no flares');
+    check((await cdp.eval(`window.__dbg.giveFlare(2)`)) === 2, 'flare picked up into the inventory');
+    check((await cdp.eval(`window.__dbg.flares().length`)) === 0, 'no flare burning before it is lit');
+    await cdp.eval(`window.__dbg.dropFlare()`);
+    await sleep(300);
+    const lit = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.flares())`));
+    check(lit.length === 1, `lighting a flare spawns a live light (${lit.length})`);
+    check((await cdp.eval(`window.__dbg.inventory().flare`)) === 1, 'lighting a flare consumes one');
+    check((await cdp.eval(`window.__dbg.monsterTension()`)) > 0, 'a lit flare raises monster tension');
+    // no flares left to burn -> the request is refused, not crashed
+    await cdp.eval(`window.__dbg.dropFlare()`);
+    await sleep(200);
+    check((await cdp.eval(`window.__dbg.inventory().flare`)) === 0, 'a second flare consumes the last one');
+
+    // standing in an active hazard cell steadily raises exposure. Cells can sit
+    // next to props, so try each until the player actually stands inside one.
+    let insideOK = false;
+    for (const hcell of hcells) {
+      await cdp.eval(`window.__dbg.teleport(${hcell.x}, ${hcell.z})`);
+      await sleep(500);
+      if ((await cdp.eval(`window.__dbg.hazard().inside`)) === true) { insideOK = true; break; }
+    }
+    check(insideOK === true, 'player can stand in a hazard cell');
+    // drive hazard ticks by hand: rAF is throttled headless, so a sleep-based
+    // wait can land only a frame or two and miss the exposure gain entirely.
+    const hzIn = JSON.parse(await cdp.eval(`(async () => {
+      window.__dbg.setElapsed(${5.6 - 2.0 + 0.2}); // just inside the active window
+      window.__dbg.setExposure(0.15);
+      await new Promise(r => setTimeout(r, 60));
+      for (let i = 0; i < 12; i++) window.__dbg.tickHazard(1 / 60);
+      return JSON.stringify(window.__dbg.hazard());
+    })()`));
+    check(hzIn.exposure > 0.15, `active surge raises exposure (${hzIn.exposure})`);
+    await cdp.eval(`window.__dbg.setElapsed(0.2)`);
+    await cdp.eval(`window.__dbg.setExposure(0)`);
+    await cdp.eval(`window.__dbg.skipCinematic()`);
 
     // ---- the finale -------------------------------------------------------
     await cdp.eval(`window.__dbg.completeObjectives()`);
@@ -168,6 +327,27 @@ async function main() {
     await sleep(2000);
     const card = await cdp.eval(`document.getElementById('ending-card').textContent`);
     check(card && card.length > 0, `ending card renders: "${String(card).slice(0, 40)}"`);
+
+    // drive the whole film by hand (rAF is throttled headless) and assert the
+    // twist beats land in order — the ending is the payoff, so verify it runs
+    await cdp.eval(`window.__dbg._tickEnding(50, 0.5)`); // +25s -> the others/horizon
+    const stageMid = await cdp.eval(`window.__dbg.endingStage()`);
+    check(stageMid && ['grass', 'others', 'horizon'].includes(stageMid), `reached the calm beats (${stageMid})`);
+    await cdp.eval(`window.__dbg._tickEnding(40, 0.5)`); // +20s -> the twist
+    const stageTwist = await cdp.eval(`window.__dbg.endingStage()`);
+    check(['rec', 'mirror', 'reveal'].includes(stageTwist), `reached the twist beats (${stageTwist})`);
+    await cdp.eval(`window.__dbg._tickEnding(40, 0.5)`); // +20s -> the replay
+    const stageEnd = await cdp.eval(`window.__dbg.endingStage()`);
+    check(stageEnd === 'replay' || stageEnd === 'end', `reached the replay/end (${stageEnd})`);
+    // the camcorder overlay returns for the replay: the players are the recording
+    check((await cdp.eval(`window.__dbg.endingOverlayVisible()`)) === true,
+      'the camcorder overlay returns at the replay');
+    // the "others" stop idling and turn to watch you as the twist lands
+    check((await cdp.eval(`window.__dbg.endingWatch()`)) > 0.5,
+      'the others turn to watch you at the reveal');
+    await cdp.eval(`window.__dbg._tickEnding(8, 0.5)`); // clear the tail delay
+    const tailShown = await cdp.eval(`!document.getElementById('ending-tail').classList.contains('hidden')`);
+    check(tailShown === true, 'ending tail (SIGNAL RETAINED…) is shown');
 
     // fast-forward: end directly and make sure we return cleanly
     await cdp.eval(`window.__dbg.endEnding()`);

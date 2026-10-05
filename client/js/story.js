@@ -201,6 +201,203 @@ export const ENDING = {
   ],
 };
 
+// ---------------------------------------------------------------------------
+// OPENING — the cold open. The game does not begin in the Backrooms: it begins
+// in the ordinary world, seconds before it stops being ordinary.
+//
+// Each phase owns a slice of time and a handful of typed lines. `world` is the
+// environment the client renders (`opening.js`): street -> wrong -> crack ->
+// fall -> land -> wake. Dialogue is internal monologue + a scrap of radio
+// traffic, kept short so it plays like a cold open, not a cutscene.
+// Each phase is one shot of the film: `card` is a location/chapter slate, each
+// line carries `voice` — how the character says it — so voice.js can colour the
+// delivery (or fall back to radio static / a whisper when speech synthesis is
+// unavailable). `shot` names the camera move opening.js plays.
+export const OPENING = {
+  id: 'cold-open',
+  phases: [
+    {
+      key: 'street', world: 'street', dur: 17, shot: 'walk',
+      card: '05:51 PM — THE WAY HOME',
+      sfx: ['streetAmb', 'steps'],
+      lines: [
+        { text: 'FIVE–FIFTY-ONE. THE SAME STREET HOME.', voice: 'calm' },
+        { text: 'SAME LAMP. SAME CAR ON THE SAME CORNER. I STOPPED COUNTING THEM WEEKS AGO.', voice: 'tired' },
+        { text: 'LONG DAY. HALF THE STREETLIGHTS ARE OUT. I JUST WANT MY DOOR.', voice: 'tired' },
+      ],
+    },
+    {
+      key: 'wrong', world: 'wrong', dur: 13, shot: 'unease',
+      card: 'SOMETHING IS OFF',
+      sfx: ['hum', 'stepsSlow'],
+      lines: [
+        { text: '...THE STREETLIGHTS. THEY ARE FARTHER APART THAN THEY WERE.', voice: 'uneasy' },
+        { text: 'THE CAR HASN\'T MOVED. I DON\'T REMEMBER IT PARKED THERE. I DON\'T REMEMBER IT AT ALL.', voice: 'uneasy' },
+        { text: 'THAT HUM. THE SUBSTATION IS A BLOCK BEHIND ME. THIS IS COMING FROM THE SIDEWALK.', voice: 'uneasy' },
+      ],
+    },
+    {
+      key: 'stare', world: 'wrong', dur: 9, shot: 'figure',
+      card: 'THERE IS SOMEONE ELSE ON THE STREET',
+      sfx: ['hum', 'whisper'],
+      lines: [
+        { text: 'SOMEONE IS STANDING UNDER THE NEXT LAMP. NOT MOVING. NOT WALKING A DOG. JUST... FACING ME.', voice: 'dread' },
+        { text: 'HELLO? ... THEY DON\'T BLINK. THE LAMP DOESN\'T FLICKER ON THEM.', voice: 'dread' },
+        { text: 'I DON\'T LOOK AWAY. I DON\'T THINK I CAN.', voice: 'dread' },
+      ],
+    },
+    {
+      key: 'crack', world: 'crack', dur: 8, shot: 'crack',
+      card: 'THE GROUND',
+      sfx: ['crack', 'subDrop'],
+      lines: [
+        { text: 'I LOOK DOWN.', voice: 'whisper' },
+        { text: 'THE CONCRETE ISN\'T CONCRETE. IT\'S A PATTERN. AND THE PATTERN IS A DOORWAY.', voice: 'whisper' },
+        { text: 'THE FLOOR GIVES WAY.', voice: 'dread' },
+      ],
+    },
+    {
+      key: 'tear', world: 'tear', dur: 6, shot: 'tear',
+      card: null,
+      sfx: ['tear', 'subDrop2'],
+      lines: [
+        { text: 'THE WORLD COMES APART LIKE TAPE.', voice: 'dread' },
+      ],
+    },
+    {
+      key: 'fall', world: 'fall', dur: 15, shot: 'fall',
+      card: null,
+      sfx: ['whoosh', 'subDrop2'],
+      lines: [
+        { text: 'I\'M FALLING. NOT DOWN — THROUGH.', voice: 'dread' },
+        { text: 'PAST WALLS THAT WERE NEVER ROOMS. PAST LIT WINDOWS WITH NOBODY HOME. PAST EVERYONE.', voice: 'dread' },
+        { text: 'THE FALLING HAS A RHYTHM. THE RHYTHM IS BEING PLAYED BACK.', voice: 'whisper' },
+      ],
+    },
+    {
+      key: 'land', world: 'land', dur: 13, shot: 'land',
+      card: 'THE HUM',
+      sfx: ['land', 'hum', 'fluores'],
+      lines: [
+        { text: 'THE HUM.', voice: 'dread' },
+        { text: 'YELLOW. DAMP CARPET. FLUORESCENT LIGHT THAT DOES NOT FLICKER.', voice: 'dread' },
+        { text: 'I KNOW THIS PLACE. I HAVE NEVER BEEN HERE.', voice: 'whisper' },
+      ],
+    },
+    {
+      key: 'wake', world: 'wake', dur: 10, shot: 'wake',
+      card: null,
+      sfx: ['hum'],
+      lines: [
+        { text: 'THE RED LIGHT IS STILL ON.', voice: 'dread' },
+        { text: 'I\'M STILL RECORDING. SOMETHING WANTS THIS KEPT.', voice: 'whisper' },
+        { text: 'MOVE.', voice: 'dread' },
+      ],
+    },
+  ],
+};
+
+// Total opening length (seconds), derived so the client never desyncs from the
+// script. The sequence ends the moment control returns.
+export const OPENING_DURATION = OPENING.phases.reduce((n, p) => n + p.dur, 0);
+
+// Opening lines may be plain strings or `{ text, voice }` objects. The reader
+// (opening.js) wants text + voice uniformly, so normalize once here.
+export function openingLine(raw) {
+  if (!raw) return { text: '', voice: 'default' };
+  if (typeof raw === 'string') return { text: raw, voice: 'default' };
+  return { text: raw.text || '', voice: raw.voice || 'default' };
+}
+export function openingLines(phase) {
+  return (phase.lines || []).map(openingLine);
+}
+
+// ---------------------------------------------------------------------------
+// PREROLL — how each level begins. Deliberately different per level so entering
+// a new chapter never feels like the same loading screen twice. `kind` selects
+// the client's transition module; `lines` are typed out underneath.
+export const PREROLL = {
+  0: {
+    kind: 'fall', title: 'INTAKE', card: 'YOU FALL INTO THE YELLOW.',
+    lines: [
+      { text: 'THE HUM.', voice: 'whisper' },
+      { text: 'YELLOW. DAMP CARPET. THE LIGHT DOES NOT FLICKER.', voice: 'dread' },
+      { text: 'IT KNOWS YOU LANDED.', voice: 'whisper' },
+    ],
+  },
+  1: {
+    kind: 'door', title: 'THE HUM', card: 'A DOOR THAT WAS NOT THERE.',
+    lines: [
+      { text: 'A SERVICE DOOR, OPEN, WARM WITH THE SOUND OF MACHINES.', voice: 'uneasy' },
+      { text: 'YOU STEP THROUGH BECAUSE NOTHING ELSE STEPPED THROUGH YOU.', voice: 'uneasy' },
+      { text: 'IT CLOSES INTO SOLID WALL BEHIND YOU.', voice: 'dread' },
+    ],
+  },
+  2: {
+    kind: 'lurch', title: 'THE LINE', card: 'THE FLOOR MOVES LIKE A MACHINE.',
+    lines: [
+      { text: 'THE GROUND SHUDDERS AND CARRIES YOU — A BELT, NOT A FLOOR.', voice: 'dread' },
+      { text: 'PIPEWORKS WITHOUT PIPES. YOUR STOMACH DROPS A DECADE.', voice: 'dread' },
+      { text: 'THE MACHINE HAS FED YOU INTO ITSELF.', voice: 'whisper' },
+    ],
+  },
+  3: {
+    kind: 'flood', title: 'THE FLOOD', card: 'YOU COME UP SOMEWHERE COLD.',
+    lines: [
+      { text: 'WATER. NOT RISING — REACHING.', voice: 'dread' },
+      { text: 'YOU SURFACE IN A ROOM THAT HAS FORGOTTEN ITS FLOOR.', voice: 'dread' },
+      { text: 'EVERY STEP HERE SWALLOWS SOMETHING THAT WAS YOU.', voice: 'whisper' },
+    ],
+  },
+  4: {
+    kind: 'wake', title: 'THE OPERATORS', card: 'YOU WAKE AT A DESK THAT IS NOT YOURS.',
+    lines: [
+      { text: 'A MONITOR. A MUG, STILL WARM. A CHAIR STILL SPINNING.', voice: 'uneasy' },
+      { text: 'SOMEONE WAS SITTING HERE A SECOND BEFORE YOU EXISTED.', voice: 'dread' },
+      { text: 'THE PAPERWORK IS RECENT. THE DUST IS NOT.', voice: 'whisper' },
+    ],
+  },
+  5: {
+    kind: 'elevator', title: 'THE GUESTS', card: 'THE LIFT OPENS ON A FLOOR THAT HAS NO NUMBER.',
+    lines: [
+      { text: 'AN ELEVATOR YOU DO NOT REMEMBER ENTERING.', voice: 'uneasy' },
+      { text: 'IT OPENS ON CARPET THE COLOUR OF DRIED BLOOD.', voice: 'dread' },
+      { text: 'THE ROOMS HERE ARE GUESTS. DO NOT KNOCK.', voice: 'whisper' },
+    ],
+  },
+  6: {
+    kind: 'ascent', title: 'THE ASCENT', card: 'SOMETHING PULLS YOU UP THROUGH THE CEILING.',
+    lines: [
+      { text: 'THE HUM IS LOUDEST HERE BECAUSE THE HEAD IS HERE.', voice: 'dread' },
+      { text: 'ABOVE THIS CEILING IS AN EXIT. IT IS ON. IT IS PROJECTING.', voice: 'dread' },
+      { text: 'IT IS READING YOU.', voice: 'whisper' },
+    ],
+  },
+};
+
+export function prerollFor(level) {
+  return PREROLL[level] || PREROLL[0];
+}
+
+// ---------------------------------------------------------------------------
+// RADIO — sparse fragments of other people's recordings, played through the
+// horror scheduler. Not lore dumps: half-heard traffic that implies someone was
+// here before you and is being replayed too.
+export const RADIO = {
+  0: ['…anyone on this channel… yellow…', '…do not trust the doors that open…', '…recording… still recording…'],
+  1: ['…flood the shafts, it hears the pumps…', '…the machines are not lifting anything…', '…we have been turning for forty days…'],
+  2: ['…capstan seven is eating the tapes…', '…do not let it dub you…', '…this is not pipework, this is a deck…'],
+  3: ['…the water is other people…', '…forget me, forget me, forget…', '…it drains and gives back less…'],
+  4: ['…intake date is today, onboarding is years ago…', '…we are the subjects now, keep filming…', '…it has started recording us…'],
+  5: ['…room forty is ours, do not knock…', '…the guests check out but never leave…', '…your room is here, your bed is here…'],
+  6: ['…believe the exit, that is the only way…', '…the read head wants a clean ending…', '…it believes we are true…'],
+};
+
+export function radioFor(level, n) {
+  const pool = RADIO[level] || RADIO[0];
+  return pool[n % pool.length];
+}
+
 export const LEVEL_ORDER = [0, 1, 2, 3, 4, 5, 6];
 export const FINAL_LEVEL = 6;
 
@@ -234,3 +431,62 @@ export function nextStoryLevel(level) {
 }
 
 export function isFinalLevel(level) { return level === FINAL_LEVEL; }
+
+// ---------------------------------------------------------------------------
+// CASE FILE — the player's journal. Every story fragment the party encounters
+// (level intros, intake-node beats, hidden-cache archives, rare whispers and
+// radio scraps) is written here as it is heard, so the narrative is not lost
+// the moment a one-shot cinematic ends. It is purely local and deterministic:
+// it never touches the network, so it cannot desync the shared world.
+//
+// `recordJournal` mutates a plain record (created by `newJournalRecord`). The
+// record is `{ [level]: { [kind:key]: { kind, key, level, title, text } } }`,
+// insertion-ordered per level and de-duplicated by kind:key.
+export function newJournalRecord() { return {}; }
+
+// Cap ambient/radio so a long session cannot grow the file without bound. The
+// authored intros, beats and cache archives are always kept.
+export const JOURNAL_LIMITS = { ambient: 8, radio: 6 };
+
+// Build the stable de-dup key for a fragment. Exported so tests can assert the
+// exact identity a record will use.
+export function journalKey(level, kind, key) { return `${level}:${kind}:${key}`; }
+
+// Returns true if the fragment was newly recorded (false if already present or
+// dropped by a cap). Mutates `rec` in place.
+export function recordJournal(rec, level, kind, text, key = null) {
+  if (!rec || !text) return false;
+  const lv = (rec[level] = rec[level] || {});
+  const k = key == null ? String(text).slice(0, 48) : String(key);
+  const id = journalKey(level, kind, k);
+  if (lv[id]) return false;
+  const cap = JOURNAL_LIMITS[kind];
+  if (cap != null) {
+    let n = 0;
+    for (const other of Object.keys(lv)) if (other.split(':')[1] === kind) n++;
+    if (n >= cap) return false;
+  }
+  lv[id] = { kind, key: k, level, text: String(text) };
+  return true;
+}
+
+// The journal as an ordered, render-ready list. Levels ascend, and within a
+// level the authored narrative reads in story order: intro, then the intake
+// beats, then the archives the party recovered, then atmosphere. This is a
+// pure function of the record — the HUD simply renders what it returns.
+const JOURNAL_KIND_ORDER = ['intro', 'beat', 'cache', 'ambient', 'radio'];
+export function journalEntriesFor(rec) {
+  if (!rec) return [];
+  const levels = Object.keys(rec).map(Number).sort((a, b) => a - b);
+  const out = [];
+  for (const lv of levels) {
+    const items = Object.values(rec[lv] || {});
+    items.sort((a, b) => {
+      const ka = JOURNAL_KIND_ORDER.indexOf(a.kind), kb = JOURNAL_KIND_ORDER.indexOf(b.kind);
+      if (ka !== kb) return ka - kb;
+      return 0; // insertion order within a kind is preserved by Object.values
+    });
+    for (const it of items) out.push(it);
+  }
+  return out;
+}

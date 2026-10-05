@@ -19,6 +19,7 @@ export class HorrorEvents {
     // story flavour: a per-level pool of unsettling one-liners. When set, the
     // scheduler occasionally surfaces one instead of a generic scare message.
     this.ambientLine = null;         // fn() -> string
+    this.radioLine = null;           // fn() -> string (other people's traffic)
   }
 
   setHostFn(fn) { this.isHostFn = fn; }
@@ -46,18 +47,20 @@ export class HorrorEvents {
     if (this.personalTimer <= 0) {
       this.personalTimer = (60 + Math.random() * 80) * (1 - depth * 0.4);
       // sometimes the room itself speaks — an environmental story fragment
-      // delivered as a found-footage subtitle rather than a scare.
-      if (this.ambientLine && Math.random() < 0.28) {
+      // delivered as a found-footage subtitle rather than a scare. Occasionally
+      // it is a scrap of someone else's radio traffic instead.
+      if (this.ambientLine && Math.random() < 0.32) {
         this.fire('storyline', player);
         return;
       }
       const roll = Math.random();
-      if (roll < 0.3) this.fire('behindyou', player);
-      else if (roll < 0.45) this.fire('glitch', player);
-      else if (roll < 0.62) this.fire('whisper', player);
-      else if (roll < 0.74) this.fire('footsteps', player);
-      else if (roll < 0.84) this.fire('waterdrip', player);
-      else if (roll < 0.9) this.fire('heartbeat', player);
+      if (roll < 0.26) this.fire('behindyou', player);
+      else if (roll < 0.4) this.fire('glitch', player);
+      else if (roll < 0.56) this.fire('whisper', player);
+      else if (roll < 0.68) this.fire('footsteps', player);
+      else if (roll < 0.77) this.fire('waterdrip', player);
+      else if (roll < 0.83) this.fire('heartbeat', player);
+      else if (roll < 0.9) this.fire('radio', player);
       // else: nothing. silence is part of the horror.
     }
   }
@@ -119,6 +122,16 @@ export class HorrorEvents {
       }
       case 'whisper': {
         a.monsterVoice('shadow', player.pos.x + (Math.random() - 0.5) * 6, 1.5, player.pos.z + (Math.random() - 0.5) * 6, 0.25);
+        break;
+      }
+      case 'radio': {
+        // a scrap of someone else's recording bleeding through the tape
+        const line = this.radioLine ? this.radioLine() : null;
+        if (line) {
+          this.onMessage && this.onMessage(line);
+          a.buzz(player.pos.x + (Math.random() - 0.5) * 4, player.pos.z + (Math.random() - 0.5) * 4, 0.5);
+          this.renderer.bumpGlitch(0.7);
+        }
         break;
       }
       case 'dooropen': {

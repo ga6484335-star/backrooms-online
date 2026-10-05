@@ -2,6 +2,7 @@
 // plus emotes (wave, point, laugh, sit, scared, dance). Rendered for remote
 // players and synced over the network.
 import * as THREE from 'three';
+import { flashlightBeamMap } from './flashlight.js';
 
 const BODY = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0.05 });
 
@@ -31,9 +32,11 @@ export function makeAvatar(color, name) {
 
   for (const k of Object.keys(parts)) if (k !== 'camera') g.add(parts[k]);
 
-  // flashlight cone attached to the camcorder
-  const fl = new THREE.SpotLight(0xfff2d8, 0, 22, 0.5, 0.6, 1.5);
-  fl.position.set(0, 1.55, 0.2);
+  // flashlight attached to the camcorder (held in the right hand). Shares the
+  // local beam cookie so remote beams have the same hot-core / soft-rim shape.
+  const fl = new THREE.SpotLight(0xffffff, 0, 22, 0.20, 0.55, 2.0);
+  fl.position.set(0, 1.5, 0.22);
+  fl.map = flashlightBeamMap();
   const flTarget = new THREE.Object3D();
   flTarget.position.set(0, 1.4, 8);
   g.add(fl, flTarget);

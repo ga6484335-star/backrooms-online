@@ -90,6 +90,9 @@
     <div class="setting-row"><label>VHS EFFECTS</label>
       <select id="set-vhs"><option value="1">ON</option><option value="0">OFF</option></select>
     </div>
+    <div class="setting-row"><label>VOICE DIALOGUE</label>
+      <select id="set-voice"><option value="1">ON</option><option value="0">OFF</option></select>
+    </div>
     <div class="setting-row"><label>FULLSCREEN</label>
       <button id="set-fullscreen" class="mbtn small">TOGGLE</button>
     </div>
@@ -130,6 +133,7 @@
 <!-- ======================= GAME HUD ======================= -->
 <div id="game-ui" class="hidden">
   <button id="btn-hud-menu" title="MENU">&#8801;</button>
+  <button id="btn-hud-journal" title="CASE FILE">&#9635;</button>
   <div class="camcorder">
     <div class="cc-top">
       <span id="rec-dot">&#9679;</span> <span class="cc-label">REC</span>
@@ -151,6 +155,15 @@
     <ul id="objective-list" class="obj-list"></ul>
   </div>
   <div id="interact-prompt" class="hidden">[ E ] <span id="interact-text">OPEN</span></div>
+  <div id="objective-compass" class="hidden">
+    <div id="oc-arrow">&#9650;</div>
+    <div id="oc-label">OBJECTIVE</div>
+    <div id="oc-dist">--m</div>
+  </div>
+  <div id="hazard-hud" class="hidden">
+    <span id="hazard-label">SURGE</span>
+    <span id="hazard-time">CLEAR</span>
+  </div>
   <div id="players-hud"></div>
   <div id="net-banner" class="hidden">RECONNECTING&#8230;</div>
   <div id="event-text" class="hidden"></div>
@@ -171,6 +184,7 @@
   <div class="mbtns">
     <button id="mb-run">RUN</button>
     <button id="mb-flash">FLASH</button>
+    <button id="mb-flare">FLARE</button>
     <button id="mb-jump">JUMP</button>
     <button id="mb-sit">SIT</button>
     <button id="mb-interact">INTERACT</button>
@@ -186,6 +200,17 @@
   <div class="death-inner">
     <div class="death-title">SIGNAL LOST</div>
     <div id="death-sub">RESPAWN IN 6s</div>
+    <button id="btn-death-respawn" class="mbtn" disabled>RESPAWN</button>
+  </div>
+</div>
+
+<!-- ======================= CASE FILE (journal) OVERLAY ======================= -->
+<div id="journal-overlay" class="hidden">
+  <div class="journal-paper">
+    <div class="journal-eyebrow">CASE FILE — SUBJECT RECORD</div>
+    <button id="journal-x" aria-label="Close case file">&times;</button>
+    <div id="journal-body"></div>
+    <button id="journal-close-btn">CLOSE FILE</button>
   </div>
 </div>
 
@@ -198,10 +223,22 @@
   </div>
 </div>
 
+<!-- ======================= LORE CACHE OVERLAY ======================= -->
+<div id="lore-overlay" class="hidden">
+  <div class="lore-paper">
+    <div class="lore-eyebrow">FOUND ARCHIVE</div>
+    <button id="lore-x" aria-label="Close archive">&times;</button>
+    <h3 id="lore-title"></h3>
+    <div id="lore-body"></div>
+    <button id="lore-close-btn">STOP TAPE</button>
+  </div>
+</div>
+
 <div id="pause-overlay" class="hidden">
   <div class="panel">
     <h2>PAUSED</h2>
     <div class="panel-row"><button id="btn-resume" class="mbtn">RESUME</button></div>
+    <div class="panel-row"><button id="btn-pause-journal" class="mbtn">CASE FILE</button></div>
     <div class="panel-row"><button id="btn-pause-settings" class="mbtn">SETTINGS</button></div>
     <div class="panel-row"><button id="btn-quit" class="mbtn ghost">LEAVE SERVER</button></div>
   </div>
@@ -219,9 +256,20 @@
   </div>
 </div>
 
+<!-- ======================= OPENING (COLD OPEN) ======================= -->
+<div id="opening-overlay" class="hidden">
+  <div class="cine-bars"></div>
+  <div id="opening-rec"><span class="opening-rec-dot"></span>REC</div>
+  <div id="opening-card" class="opening-card hidden"></div>
+  <div id="opening-speaker" class="cine-speaker"></div>
+  <div id="opening-line" class="cine-line"></div>
+  <div id="opening-hint" class="cine-hint hidden">[ E ] SKIP</div>
+</div>
+
 <!-- ======================= STORY CINEMATIC ======================= -->
 <div id="cinematic-overlay" class="hidden">
   <div class="cine-bars"></div>
+  <div id="cinematic-speaker" class="cine-speaker"></div>
   <div id="cinematic-line" class="cine-line"></div>
   <div id="cinematic-hint" class="cine-hint hidden">[ E ] CONTINUE</div>
 </div>
@@ -239,6 +287,7 @@
 </div>
 
 <div id="fade"></div>
+<div id="hazard-overlay" class="hidden"></div>
 <div id="boot-msg">ESTABLISHING SIGNAL…</div>
 
 <script type="module" src="/js/main.js"></script>

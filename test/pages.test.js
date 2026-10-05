@@ -35,6 +35,15 @@ async function cdpTarget() {
 
 async function main() {
   console.log(`PAGES BOOT TEST \u2014 target: ${TARGET}\n`);
+  // Boot a local static+ws server when no target URL was supplied so the test
+  // is self-contained (previously it needed a server pre-running on :13500).
+  let server = null;
+  if (!process.argv[2]) {
+    server = spawn('node', ['server/index.js'], {
+      env: { ...process.env, PORT: '13500' }, stdio: 'pipe',
+    });
+    await sleep(1500);
+  }
   const chrome = spawn(CHROME, ['--headless=new', '--no-sandbox', '--disable-gpu',
     `--remote-debugging-port=${CDP_PORT}`, '--user-data-dir=/tmp/pagestest-chrome',
     'about:blank'], { stdio: 'pipe' });
@@ -112,8 +121,10 @@ async function main() {
   check(wsOk === 'opened' || wsOk === 'already-open' || wsOk === 'no-url-hook', 'websocket endpoint reachable or not probed');
 
   chrome.kill();
+  if (server) server.kill('SIGKILL');
   if (failures) { console.log(`\n${failures} FAILURES`); process.exit(1); }
   console.log('\nPAGES BOOT TEST PASSED \u2714');
+  process.exit(0);
 }
 
 main().catch((e) => { console.error('TEST EXCEPTION:', e.message); process.exit(1); });
