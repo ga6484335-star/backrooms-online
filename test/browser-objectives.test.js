@@ -16,6 +16,20 @@ function check(cond, label) {
   else { console.log('  \u2718 FAILED: ' + label); failures++; }
 }
 
+// Headless rAF is throttled, so the chunk stream + interact detection can land
+// later than a fixed sleep assumes (and the lag varies run to run, which made
+// this suite flaky). Poll until the expected interactable is in reach instead.
+async function waitNear(cdp, type, ms = 8000) {
+  const t0 = Date.now();
+  let last = null;
+  while (Date.now() - t0 < ms) {
+    last = await cdp.eval(`(() => { const it = window.__dbg.nearInteractable(); return it ? it.type : null; })()`);
+    if (last === type) return last;
+    await sleep(120);
+  }
+  return last;
+}
+
 async function getWsUrl() {
   for (let i = 0; i < 30; i++) {
     try {
@@ -138,8 +152,7 @@ async function main() {
     // walk to the first site and activate it via the real interact path
     const s0 = siteArr[0];
     await cdp.eval(`window.__dbg.teleport(${s0.x}, ${s0.z})`);
-    await sleep(1400); // let the chunk stream + interact detection run
-    const near = await cdp.eval(`(() => { const it = window.__dbg.nearInteractable(); return it ? it.type : null; })()`);
+    const near = await waitNear(cdp, 'site');
     check(near === 'site', `near objective site after teleport (${near})`);
     const acted = await cdp.eval(`window.__dbg.interact()`);
     check(acted === 'site', `interact activated the site (${acted})`);
@@ -153,8 +166,7 @@ async function main() {
     check(typeof cache.lore.body === 'string' && cache.lore.body.length > 0, 'cache carries a lore fragment');
     check((await cdp.eval(`window.__dbg.cacheFound()`)).length === 0, 'cache starts unfound');
     await cdp.eval(`window.__dbg.teleport(${cache.x}, ${cache.z})`);
-    await sleep(1400);
-    const nearCache = await cdp.eval(`(() => { const it = window.__dbg.nearInteractable(); return it ? it.type : null; })()`);
+    const nearCache = await waitNear(cdp, 'cache');
     check(nearCache === 'cache', `near hidden cache after teleport (${nearCache})`);
     const actedCache = await cdp.eval(`window.__dbg.interact()`);
     check(actedCache === 'cache', `interact opened the cache (${actedCache})`);
@@ -170,7 +182,7 @@ async function main() {
     // exit must be SEALED before objectives are done
     const exit = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.exitPos())`));
     await cdp.eval(`window.__dbg.teleport(${exit.x}, ${exit.z})`);
-    await sleep(1400);
+    await sleep(900); // a locked exit is not offered as an interactable at all
     await cdp.eval(`window.__dbg.interact()`);
     check((await cdp.eval(`window.__dbg.level()`)) === 5, 'sealed exit does not advance the level');
     check((await cdp.eval(`window.__dbg.exitUnlocked()`)) === false, 'exit still locked with objectives remaining');
@@ -178,7 +190,7 @@ async function main() {
     // finish the objectives on the rest of the sites via the real path
     for (let i = 1; i < siteArr.length; i++) {
       await cdp.eval(`window.__dbg.teleport(${siteArr[i].x}, ${siteArr[i].z})`);
-      await sleep(900);
+      await waitNear(cdp, 'site');
       await cdp.eval(`window.__dbg.interact()`);
     }
     check((await cdp.eval(`window.__dbg.exitUnlocked()`)) === false,
@@ -193,8 +205,7 @@ async function main() {
     // collect all but the last via the real interact path
     for (let i = 0; i < pz.length - 1; i++) {
       await cdp.eval(`window.__dbg.teleport(${pz[i].x}, ${pz[i].z})`);
-      await sleep(900);
-      const nearPz = await cdp.eval(`(() => { const it = window.__dbg.nearInteractable(); return it ? it.type : null; })()`);
+      const nearPz = await waitNear(cdp, 'puzzle');
       check(nearPz === 'puzzle', `near lock key after teleport (${nearPz})`);
       const actedPz = await cdp.eval(`window.__dbg.interact()`);
       check(actedPz === 'puzzle', `interact turned the key (${actedPz})`);
@@ -202,7 +213,7 @@ async function main() {
     check((await cdp.eval(`window.__dbg.exitUnlocked()`)) === false, 'exit still sealed with one key left');
     const lastKey = pz[pz.length - 1];
     await cdp.eval(`window.__dbg.teleport(${lastKey.x}, ${lastKey.z})`);
-    await sleep(900);
+    await waitNear(cdp, 'puzzle');
     await cdp.eval(`window.__dbg.interact()`);
     check(JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.objectives())`)).puzzleDone === true,
       'puzzle lock reports complete');
@@ -223,7 +234,7 @@ async function main() {
 
     // now the exit advances the party to the story's next level (6)
     await cdp.eval(`window.__dbg.teleport(${exit.x}, ${exit.z})`);
-    await sleep(1200);
+    await waitNear(cdp, 'exit');
     await cdp.eval(`window.__dbg.interact()`);
     // an epilogue cinematic runs first, then enterLevel(6) fires; tick it
     // deterministically instead of racing setTimeout-driven skips
@@ -256,8 +267,7 @@ async function main() {
 
     // loot is taken through the real interact path (and removed for the party)
     await cdp.eval(`window.__dbg.teleport(${loot[0].x}, ${loot[0].z})`);
-    await sleep(1400);
-    const nearLoot = await cdp.eval(`(() => { const it = window.__dbg.nearInteractable(); return it ? it.type : null; })()`);
+    const nearLoot = await waitNear(cdp, 'loot');
     check(nearLoot === 'loot', `near hazard loot after teleport (${nearLoot})`);
     const actedLoot = await cdp.eval(`window.__dbg.interact()`);
     check(actedLoot === 'loot', `interact took the loot (${actedLoot})`);
