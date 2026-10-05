@@ -33,6 +33,7 @@
 - Remote player record in avatar.js stores `anim` on the record root (`p.anim`), not in `p.cur`.
 - Eye height is 1.62; jump apex ≈ 0.48 (v=3.6, g=13.5); remote `cur.y` includes jump offset.
 - The OpenHands browser tool clicks by coordinates and can miss small corner elements; verify corner-button behavior with JS `.click()` via CDP instead.
+- Headless rAF is throttled, so any test that sleeps a fixed amount and then asserts on streamed state (chunks/interactables, monster snapshots, remote anims, DOM prompts) is flaky — the failing assertion moves run to run. Poll for the expected state (or drive `__dbg.step`/`_tickCinematic` by hand) instead of trusting a wall-clock sleep. All four browser suites were de-flaked this way.
 
 ## Monster system (16 species, monster-redesign phase)
 - defs.js MONSTER_TYPES + buildMonster(type): procedural bodies with wrong anatomy; u.detail[] = fine meshes (fingers/ribs) hidden beyond 30m LOD; u.setPose (tallone) snaps discrete postures.
