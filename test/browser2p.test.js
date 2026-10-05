@@ -122,15 +122,24 @@ async function main() {
     const emoteSeen = await p2.eval(`window.__lastRemoteEmote || 'none'`);
     console.log('  [info] emote seen by client 2:', emoteSeen);
 
-    // --- client 1 sits; client 2 must see the sit animation via state sync
+    // --- client 1 sits; client 2 must see the sit animation via state sync.
+    // Poll instead of a fixed sleep: state snapshots lag under throttled rAF.
     await p1.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyC'}))`);
-    await sleep(1200);
-    const sitSeen = await p2.eval(`(window.__dbg && window.__dbg.remoteAnims) ? window.__dbg.remoteAnims() : ['no-dbg']`);
+    let sitSeen = [];
+    for (let i = 0; i < 40; i++) {
+      sitSeen = await p2.eval(`(window.__dbg && window.__dbg.remoteAnims) ? window.__dbg.remoteAnims() : ['no-dbg']`);
+      if (Array.isArray(sitSeen) && sitSeen.includes('sit')) break;
+      await sleep(200);
+    }
     console.log('  [info] remote anims seen by client 2:', JSON.stringify(sitSeen));
     check(Array.isArray(sitSeen) && sitSeen.includes('sit'), 'sit posture synced to peer');
     await p1.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyC'}))`);
-    await sleep(1200);
-    const standSeen = await p2.eval(`(window.__dbg && window.__dbg.remoteAnims) ? window.__dbg.remoteAnims() : ['no-dbg']`);
+    let standSeen = ['sit'];
+    for (let i = 0; i < 40; i++) {
+      standSeen = await p2.eval(`(window.__dbg && window.__dbg.remoteAnims) ? window.__dbg.remoteAnims() : ['no-dbg']`);
+      if (Array.isArray(standSeen) && !standSeen.includes('sit')) break;
+      await sleep(200);
+    }
     check(Array.isArray(standSeen) && !standSeen.includes('sit'), 'stand synced back to peer');
 
     // --- client 1 jumps; client 2 must see vertical offset. rAF is throttled
@@ -155,10 +164,18 @@ async function main() {
     `);
     await sleep(2500);
     const hostTypes = await p1.eval(`window.__dbg.monsterTypes()`);
-    const cliTypes = await p2.eval(`window.__dbg.monsterTypes()`);
+    // rAF is throttled headless, so the host's snapshot loop can take several
+    // seconds to stream all seven species; poll instead of trusting one sleep.
+    const wantTypes = ['tallone', 'hollow', 'bonefiend', 'walldweller', 'deepone', 'ceiling', 'falseplayer'];
+    let cliTypes = [];
+    for (let i = 0; i < 40; i++) {
+      cliTypes = await p2.eval(`window.__dbg.monsterTypes()`);
+      if (wantTypes.every((t) => cliTypes.some((s) => s.startsWith(t + ':')))) break;
+      await sleep(250);
+    }
     console.log('  [info] host monsters:', JSON.stringify(hostTypes));
     console.log('  [info] client monsters:', JSON.stringify(cliTypes));
-    for (const t of ['tallone', 'hollow', 'bonefiend', 'walldweller', 'deepone', 'ceiling', 'falseplayer']) {
+    for (const t of wantTypes) {
       check(cliTypes.some((s) => s.startsWith(t + ':')), `client 2 sees ${t}`);
     }
 
