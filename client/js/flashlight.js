@@ -32,7 +32,7 @@ const AIM_TAU_V = 0.078;
 const POS_TAU = 0.05;
 
 // base intensity (candela). Physical falloff does the distance work.
-const SPOT_BASE = 560;
+const SPOT_BASE = 680;
 const SPILL_BASE = 0;
 const FILL_BASE = 0;
 
@@ -352,6 +352,9 @@ export class Flashlight {
       }
     }
     this.spot.intensity = SPOT_BASE * f;
+    // QA override: a forced intensity wins over the wobble/flicker model so a
+    // test can hold the beam at a fixed level (set via __dbg.setFlashIntensity)
+    if (this._forced != null) this.spot.intensity = this._forced;
     this.spill.intensity = this.useSpill ? SPILL_BASE * f : 0;
     this.fill.intensity = this.useFill ? FILL_BASE * f : 0;
 

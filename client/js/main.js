@@ -2293,12 +2293,26 @@ window.__dbg = {
   startEnding: () => startEnding(),
   endEnding: () => endEnding(),
   flash: () => (flash ? { on: flash.on, battery: flash.battery } : null),
+  // QA hook: force the beam intensity (proves whether a screen feature is the
+  // light's hotspot or a separate mesh)
+  setFlashIntensity: (n) => { if (flash) { flash.spot.intensity = n; flash._forced = n; } return flash ? flash.spot.intensity : null; },
   // QA hook: toggle the bloom pass to isolate its contribution to screen glow
   bloom: (on, strength) => {
     if (on === undefined) return { enabled: engine.bloom.enabled, strength: engine.bloom.strength, radius: engine.bloom.radius, threshold: engine.bloom.threshold };
     engine.bloom.enabled = !!on;
     if (typeof strength === 'number') engine.bloom.strength = strength;
     return { enabled: engine.bloom.enabled, strength: engine.bloom.strength };
+  },
+  // QA hook: hide/show the unlit emissive meshes (light panels, objective
+  // beacons, exit gate glow) to tell a lit MESH apart from a real light pool
+  setEmissive: (v) => {
+    let n = 0;
+    scene.traverse((o) => {
+      if (o.name === 'lightpanels') { o.visible = !!v; n++; }
+      const m = o.material;
+      if (m && m.isMeshBasicMaterial && o.name !== 'lightpanels') { o.visible = !!v; n++; }
+    });
+    return n;
   },
   // flashlight shape + held-lag state (for tests: the beam must be narrow and
   // must trail the camera)
@@ -2468,6 +2482,28 @@ window.__dbg = {
   },
   remoteAnims: () => (remotePlayers ? [...remotePlayers.players.values()].map((p) => p.anim) : []),
   remoteY: () => (remotePlayers ? [...remotePlayers.players.values()].map((p) => p.cur.y) : []),
+  // QA: raycast from the camera and report what is hit. With (nx,ny) it fires
+  // through that normalised screen point (-1..1) instead of dead centre — used
+  // to identify any object sitting directly in front of the player.
+  raycast: (maxD = 40, nx = 0, ny = 0) => {
+    const rc = new THREE.Raycaster();
+    const o = new THREE.Vector3(); camera.getWorldPosition(o);
+    const d = new THREE.Vector3();
+    if (nx || ny) d.set(nx, ny, 0.5).unproject(camera).sub(o).normalize();
+    else camera.getWorldDirection(d);
+    rc.set(o, d);
+    rc.far = maxD;
+    return rc.intersectObjects(scene.children, true).slice(0, 6).map((h) => {
+      const ob = h.object;
+      const m = Array.isArray(ob.material) ? ob.material[0] : ob.material;
+      return {
+        name: ob.name || '(anon)', geo: ob.geometry ? ob.geometry.type : '?',
+        dist: +h.distance.toFixed(2),
+        col: m && m.color ? [m.color.r, m.color.g, m.color.b].map((v) => +v.toFixed(2)) : null,
+        basic: !!(m && m.isMeshBasicMaterial),
+      };
+    });
+  },
 };
 // boot message fades only after at least one frame has run, so we know
 // the module graph actually executed (not a bare module-load failure).

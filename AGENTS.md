@@ -9,6 +9,7 @@
 - Sessions: `hello` carries a `token`; dropped sockets keep their slot for `REJOIN_GRACE_MS` (default 90 s) and clients rejoin with `{t:'rejoin', code, token}` (same player id). Explicit `leave` removes instantly.
 - Client auto-reconnect (main.js): backoff 1→15 s, `net-banner` HUD element, session in `sessionStorage` (`backrooms-session`); page refresh mid-game auto-resumes. Watchdog: 20 s of silence while in a room => forced socket close.
 - Deploy files: `Dockerfile`, `render.yaml` (Frankfurt), `fly.toml`. Production check: `docker build` verified.
+- DEPLOYMENT GOTCHA: Render, Fly and GitHub Pages all build from `main` (`.github/workflows/static.yml` triggers on `push: branches: [main]`). Work committed only to a feature branch (e.g. `opening-cinematic`) is NEVER deployed — the live site keeps serving old code. A user report of a "still broken" visual is often an unmerged branch, not a missing fix. Verify with: `curl -s https://ga6484335-star.github.io/backrooms-online/js/<file>.js | grep <marker>` and compare against `main`.
 - Watchdog: `/tmp/backrooms-watchdog.sh` restarts `node server/index.js` when it dies. To deploy new code: `kill $(pgrep -f "node server/index.js")` — watchdog respawns it.
 - Live URL: https://work-1-aqisgfbtgpjkucrl.prod-runtime.all-hands.dev/ (port 12000).
 
