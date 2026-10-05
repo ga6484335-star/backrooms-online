@@ -139,7 +139,10 @@ export class RendererEngine {
     this.renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(this.renderPass);
 
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.35, 0.6, 0.82);
+    // Bloom is kept only for genuine light sources (ceiling panels, sparks).
+    // Strength/radius are deliberately low and the threshold high, so an
+    // ordinary lit wall or the flashlight hotspot does NOT smear into a glow.
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.10, 0.3, 0.95);
     this.composer.addPass(this.bloom);
 
     this.vhs = new ShaderPass(VHSShader);
@@ -165,7 +168,7 @@ export class RendererEngine {
     const scale = { low: 0.5, medium: 0.7, high: Math.min(dpr, 1.6), ultra: Math.min(dpr, 2) }[q];
     this.renderer.setPixelRatio(scale);
     this.bloom.enabled = q !== 'low';
-    this.bloom.strength = q === 'ultra' ? 0.45 : 0.3;
+    this.bloom.strength = q === 'ultra' ? 0.16 : 0.10;
     this.resize();
   }
 

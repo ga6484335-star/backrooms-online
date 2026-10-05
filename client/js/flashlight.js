@@ -31,10 +31,10 @@ const AIM_TAU = 0.055;
 const AIM_TAU_V = 0.078;
 const POS_TAU = 0.05;
 
-// base intensities (candela). Physical falloff does the distance work.
-const SPOT_BASE = 430;
-const SPILL_BASE = 22;
-const FILL_BASE = 0.30;
+// base intensity (candela). Physical falloff does the distance work.
+const SPOT_BASE = 560;
+const SPILL_BASE = 0;
+const FILL_BASE = 0;
 
 // ---------------------------------------------------------------------------
 // Cookie (gobo) textures. One tight beam profile, one broad soft spill. Drawn
@@ -82,10 +82,12 @@ function makeCookie(size, stops, facetAmp, grainAmp) {
 
 function beamCookie() {
   if (!_beamCookie) {
-    // hot core → long soft shoulder → dim halo → dark rim
+    // Concentrated hot core that falls off quickly to a fully dark rim. A real
+    // narrow lamp has a small bright spot with only a little shoulder — a long
+    // soft shoulder reads as a painted glow once bloom touches it.
     _beamCookie = makeCookie(256, [
-      [0.00, 1.00], [0.16, 0.99], [0.32, 0.82], [0.46, 0.55],
-      [0.62, 0.26], [0.78, 0.085], [0.92, 0.02], [1.00, 0.0],
+      [0.00, 1.00], [0.16, 0.99], [0.30, 0.80], [0.42, 0.52],
+      [0.55, 0.24], [0.70, 0.07], [0.86, 0.012], [1.00, 0.0],
     ], 0.05, 0.02);
   }
   return _beamCookie;
@@ -115,27 +117,31 @@ export class Flashlight {
     this.time = 0;
     this.quality = quality;
     this.castShadows = quality === 'high' || quality === 'ultra';
-    // mobile/low keeps exactly ONE light (the primary spot). The spill + lens
-    // fill are only added back on medium and above, where the extra per-fragment
-    // cost is affordable.
-    this.useSpill = quality !== 'low';
-    this.useFill = quality === 'high' || quality === 'ultra';
+    // mobile/low keeps exactly ONE light (the primary spot). No secondary spill
+    // light is used at all: a wide dim wash is exactly what painted a large warm
+    // halo over the scene. One focused, neutral beam is both more physical and
+    // cheaper.
+    this.useSpill = false;
+    this.useFill = false;
 
     // --- primary beam: narrow, physical falloff, soft edge, cookie-shaped ---
-    this.spot = new THREE.SpotLight(0xfff0d0, 0, 85, 0.17, 0.85, 2.0);
+    // Neutral daylight-white: a real handheld lamp is not tinted, and a warm
+    // tint over the already-warm Level 0 palette reads as a yellow glow.
+    this.spot = new THREE.SpotLight(0xffffff, 0, 60, 0.20, 0.55, 2.0);
     this.spot.visible = false;
     this.spot.map = beamCookie();
     this.spot.castShadow = this.castShadows;
     if (this.castShadows) this._configureShadow();
 
-    // --- spill halo: wider + dimmer, its own soft cookie. Kept weak so the
-    //     darkness outside the beam stays dark. ---
-    this.spill = new THREE.SpotLight(0xffe4b8, 0, 30, 0.55, 0.95, 2.0);
+    // --- spill: retained but permanently disabled (kept so setQuality/tests
+    //     that reference it stay valid). A wide low-contrast wash is the single
+    //     biggest source of the fake "yellow blob", so it is never shown. ---
+    this.spill = new THREE.SpotLight(0xffffff, 0, 30, 0.55, 0.95, 2.0);
     this.spill.visible = false;
     this.spill.map = spillCookie();
 
-    // faint, short fill at the lens so held items/feet are not pitch black
-    this.fill = new THREE.PointLight(0xffe9c0, 0, 2.2, 2);
+    // --- fill: retained but permanently disabled (see above). ---
+    this.fill = new THREE.PointLight(0xffffff, 0, 2.2, 2);
     this.fill.visible = false;
 
     scene.add(this.spot, this.spot.target, this.spill, this.spill.target, this.fill);
@@ -159,7 +165,7 @@ export class Flashlight {
   _configureShadow() {
     this.spot.shadow.mapSize.set(1024, 1024);
     this.spot.shadow.camera.near = 0.22;
-    this.spot.shadow.camera.far = 85;
+    this.spot.shadow.camera.far = 60;
     this.spot.shadow.focus = 1.0;
     this.spot.shadow.bias = -0.0014;
     this.spot.shadow.normalBias = 0.03;
@@ -206,8 +212,9 @@ export class Flashlight {
     if (shadows) this._configureShadow();
     this.spot.castShadow = shadows;
     this.castShadows = shadows;
-    this.useSpill = q !== 'low';
-    this.useFill = shadows;
+    // secondary lights stay off at every quality (they cause the warm halo)
+    this.useSpill = false;
+    this.useFill = false;
     this._apply();
   }
 

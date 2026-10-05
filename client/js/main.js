@@ -2293,6 +2293,13 @@ window.__dbg = {
   startEnding: () => startEnding(),
   endEnding: () => endEnding(),
   flash: () => (flash ? { on: flash.on, battery: flash.battery } : null),
+  // QA hook: toggle the bloom pass to isolate its contribution to screen glow
+  bloom: (on, strength) => {
+    if (on === undefined) return { enabled: engine.bloom.enabled, strength: engine.bloom.strength, radius: engine.bloom.radius, threshold: engine.bloom.threshold };
+    engine.bloom.enabled = !!on;
+    if (typeof strength === 'number') engine.bloom.strength = strength;
+    return { enabled: engine.bloom.enabled, strength: engine.bloom.strength };
+  },
   // flashlight shape + held-lag state (for tests: the beam must be narrow and
   // must trail the camera)
   flashlightCone: () => (flash ? {
@@ -2306,6 +2313,9 @@ window.__dbg = {
     map: !!flash.spot.map,
     cookie: flash.spot.map ? (flash.spot.map.image ? flash.spot.map.image.width : 0) : 0,
     shadows: !!flash.spot.castShadow,
+    // the beam must be neutral white — a warm tint over the already-warm
+    // Level 0 palette is what painted a yellow halo across the screen
+    color: [flash.spot.color.r, flash.spot.color.g, flash.spot.color.b],
     // guard against the old translucent cone overlay creeping back: the
     // flashlight must not own any mesh at all (only lights). Must be false.
     beamMesh: !!flash.beam,

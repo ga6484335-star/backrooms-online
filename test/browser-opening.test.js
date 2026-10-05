@@ -134,18 +134,20 @@ async function main() {
   const p = JSON.parse(pos);
   check(p.every((n) => Number.isFinite(n)) && p[1] <= 2, 'player lands on solid ground: ' + pos);
 
-  // flashlight: tight physical beam with a broader spill
+  // flashlight: tight, neutral, physically-falloff beam — NO wide spill wash
+  // (a wide warm spill was the source of the fake yellow halo over the scene)
   await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyF'}))`);
   await sleep(400);
   const cone = await cdp.eval(`JSON.stringify(window.__dbg.flashlightCone())`);
   const c = JSON.parse(cone);
-  check(c && c.angle > 0.1 && c.angle < 0.2, 'flashlight beam is a tight, focused cone (' + (c && c.angle) + ' rad)');
-  check(c && c.penumbra > 0.5 && c.penumbra < 0.9, 'flashlight beam has soft natural edges (penumbra ' + (c && c.penumbra) + ')');
-  check(c && c.spillAngle > c.angle, 'flashlight has a wider spill halo');
-  check(c && c.decay === 2 && c.distance >= 60, 'flashlight has physical falloff and real throw');
+  check(c && c.angle > 0.1 && c.angle < 0.25, 'flashlight beam is a tight, focused cone (' + (c && c.angle) + ' rad)');
+  check(c && c.penumbra > 0.4 && c.penumbra < 0.8, 'flashlight beam has soft natural edges (penumbra ' + (c && c.penumbra) + ')');
+  check(c && c.decay === 2 && c.distance >= 45, 'flashlight has physical falloff and real throw');
   check(c && c.intensity > 0, 'flashlight carries natural intensity');
   check(c && c.map === true && c.cookie > 0, 'flashlight projects a shaped beam cookie, not a flat disc');
-  check(c && c.spillIntensity > 0 && c.spillIntensity < c.intensity * 0.5, 'spill halo is dimmer than the core');
+  check(c && c.color && Math.abs(c.color[0] - c.color[2]) < 0.05 && c.color[0] > 0.9,
+    'flashlight is neutral white, not a warm/yellow tint (' + JSON.stringify(c && c.color) + ')');
+  check(c && c.spillIntensity === 0, 'flashlight has no wide spill wash (no fake halo)');
   check(c && c.beamMesh === false, 'flashlight is pure light — no translucent cone/overlay mesh');
 
   // held-light aim lag: a sustained turn must leave the beam trailing behind,

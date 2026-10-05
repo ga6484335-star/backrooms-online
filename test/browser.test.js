@@ -373,10 +373,12 @@ async function main() {
     check(lighting && lighting.on === true && lighting.off === true, 'flashlight toggles on/off with F');
     check(lighting && lighting.cone && lighting.cone.angle > 0.1 && lighting.cone.angle < 0.35,
       'flashlight beam is a tight cone, not a wide flap (' + JSON.stringify(lighting.cone && lighting.cone.angle) + ')');
-    check(lighting && lighting.cone && lighting.cone.spillAngle > lighting.cone.angle,
-      'flashlight has a wider spill halo around the beam');
+    check(lighting && lighting.cone && lighting.cone.spillIntensity === 0,
+      'flashlight has no wide spill wash (no fake yellow halo)');
     check(lighting && lighting.cone && lighting.cone.decay === 2,
       'flashlight uses physical (inverse-square) falloff');
+    check(lighting && lighting.cone && lighting.cone.color && Math.abs(lighting.cone.color[0] - lighting.cone.color[2]) < 0.05,
+      'flashlight is neutral white, not a warm tint');
     check(lighting && lighting.cone && lighting.cone.beamMesh === false,
       'flashlight is pure light — no translucent cone/overlay mesh');
 

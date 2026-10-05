@@ -34,7 +34,7 @@ export function makeAvatar(color, name) {
 
   // flashlight attached to the camcorder (held in the right hand). Shares the
   // local beam cookie so remote beams have the same hot-core / soft-rim shape.
-  const fl = new THREE.SpotLight(0xfff0d0, 0, 22, 0.20, 0.85, 2.0);
+  const fl = new THREE.SpotLight(0xffffff, 0, 22, 0.20, 0.55, 2.0);
   fl.position.set(0, 1.5, 0.22);
   fl.map = flashlightBeamMap();
   const flTarget = new THREE.Object3D();
