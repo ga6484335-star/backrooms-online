@@ -154,7 +154,12 @@ async function main() {
     if (doors.length > 0) {
       const d = nearDoors[0];
       await cdp.eval(`window.__dbg.teleport(${d.x + 1.5}, ${d.z + 1.5}, 0)`);
-      const near = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.nearInteractable())`) || 'null');
+      let near = null;
+      for (let i = 0; i < 40; i++) {
+        near = JSON.parse(await cdp.eval(`JSON.stringify(window.__dbg.nearInteractable())`) || 'null');
+        if (near) break;
+        await sleep(150);
+      }
       check(!!near, 'door in interact range after teleport');
       const before = (near && near.data && near.data.locked) || false;
       const hitType = await cdp.eval(`window.__dbg.interact()`);
@@ -171,7 +176,14 @@ async function main() {
         // find the key for this door and pick it up via interactor progression
         const keyId = 'key:' + d.key;
         // teleport-walk around the chunk to find a key item near a locked door
-        const gotLocked = await cdp.eval(`window.__dbg.prompt()`);
+        // the prompt element only refreshes on a real rAF frame (throttled
+        // headless), so poll it instead of reading once after a 200ms sleep
+        let gotLocked = null;
+        for (let i = 0; i < 40; i++) {
+          gotLocked = await cdp.eval(`window.__dbg.prompt()`);
+          if (/LOCKED|NEED|KEY/.test(String(gotLocked))) break;
+          await sleep(150);
+        }
         check(/LOCKED|NEED|KEY/.test(String(gotLocked)), 'locked door prompt shows LOCKED: ' + gotLocked);
       } else {
         // the door may already be open when we toggle it; a valid interaction
@@ -204,10 +216,14 @@ async function main() {
     await cdp.eval(`window.__dbg.teleport(window.__dbg.pos()[0] + 2, window.__dbg.pos()[2] + 2, 3.0)`); // move + look away (yaw=3≈facing -x)
     await cdp.eval(`window.__dbg.step(0.05)`);
     await cdp.eval(`window.__dbg.placeNote(0, 0)`); // note directly under the player (0m beats any door)
-    await sleep(400);
+    let placedRaw = null;
+    for (let i = 0; i < 40; i++) {
+      placedRaw = await cdp.eval(`window.__dbg.nearInteractable() && window.__dbg.nearInteractable().type`);
+      if (placedRaw === 'note') break;
+      await sleep(150);
+    }
     const dbgNotes = await cdp.eval(`JSON.stringify(window.__dbg.placedNotes ? window.__dbg.placedNotes().slice(-1) : null)`);
     console.log('  [info] placedNotes:', String(dbgNotes).slice(0, 120));
-    const placedRaw = await cdp.eval(`Math.hypot(1.5,1.5) < 3.2 ? window.__dbg.nearInteractable() && window.__dbg.nearInteractable().type : null`);
     if (placedRaw !== 'note') {
       console.log('  [info] note clue- what nearInteractable saw:', placedRaw);
     }
