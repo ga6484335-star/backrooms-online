@@ -56,6 +56,12 @@
 - World: `chunk.js buildObjectiveSite()` (black monolith pedestal + twin tape reels) and the exit gate (archive doorframe w/ cold light) are placed per `objectiveSites`/`exitCellFor`; chunks expose `interactables`; `WorldManager.nearestInteractable(px,pz,isUsed)`.
 - Flow: sites -> `objectives.isComplete()` -> `unlockExit()` -> `useExit()` -> host `advance` (or `ending` on FINAL_LEVEL) -> `levelTransition` (epilogue cinematic) -> `enterLevel`. Non-blocking.
 
+## CASE FILE journal (local, deterministic)
+- `client/js/story.js` — `newJournalRecord/recordJournal/journalEntriesFor/journalKey/JOURNAL_LIMITS`. Pure data; the record is `{level: {'level:kind:key': {kind,key,level,text}}}`. Kinds: `intro` (arrival narration, recorded on every intro), `beat` (intake node), `cache` (hidden archive), `ambient`, `radio`. ambient/radio are capped; authored intro/beat/cache never dropped. `journalEntriesFor` sorts by level asc, then `intro,beat,cache,ambient,radio`, preserving insertion order within a kind.
+- `client/js/main.js` — `jot(level,kind,text,key)` + `recordIntro(level)`; `openJournal/closeJournal/toggleJournal/renderJournal`. Bound to HUD `#btn-hud-journal`, pause `#btn-pause-journal`, key `J` (Esc/X closes), and `#journal-overlay`. The button gains `.has-new` on a fresh fragment and loses it when opened.
+- HARD RULE: the journal is per-client and NEVER networked — it must not touch `net`, so it cannot desync the shared world or consume the worldgen PRNG. It is reset in `leaveToMenu` (a new run = a new case file).
+- Debug hooks: `__dbg.journal()/journalCount()/journalOpen()/journalText()/journalHasNew()/journalIntro(level)`. Unit test: `node test/journal.test.mjs` (44 assertions).
+
 ## HARD RULE — co-op/relay behaviour must be identical on every client
 - Every client runs the SAME code from the SHARED SEED. Spawning is HOST-ONLY (`hostSpawnLogic`); clients only receive snapshots/LOD. `monsters.update()` MUST be called identically on host and clients.
 - `objectiveSites(world, level)` and `exitCellFor(world, level)` MUST stay array-index deterministic — per-site `rngFrom(seed,...)` consumes the shared PRNG stream. NEVER call them in a different order on different clients (map/filter must preserve index order).

@@ -133,6 +133,7 @@
 <!-- ======================= GAME HUD ======================= -->
 <div id="game-ui" class="hidden">
   <button id="btn-hud-menu" title="MENU">&#8801;</button>
+  <button id="btn-hud-journal" title="CASE FILE">&#9635;</button>
   <div class="camcorder">
     <div class="cc-top">
       <span id="rec-dot">&#9679;</span> <span class="cc-label">REC</span>
@@ -203,6 +204,16 @@
   </div>
 </div>
 
+<!-- ======================= CASE FILE (journal) OVERLAY ======================= -->
+<div id="journal-overlay" class="hidden">
+  <div class="journal-paper">
+    <div class="journal-eyebrow">CASE FILE — SUBJECT RECORD</div>
+    <button id="journal-x" aria-label="Close case file">&times;</button>
+    <div id="journal-body"></div>
+    <button id="journal-close-btn">CLOSE FILE</button>
+  </div>
+</div>
+
 <!-- ======================= NOTE OVERLAY ======================= -->
 <div id="note-overlay" class="hidden">
   <div class="note-paper">
@@ -227,6 +238,7 @@
   <div class="panel">
     <h2>PAUSED</h2>
     <div class="panel-row"><button id="btn-resume" class="mbtn">RESUME</button></div>
+    <div class="panel-row"><button id="btn-pause-journal" class="mbtn">CASE FILE</button></div>
     <div class="panel-row"><button id="btn-pause-settings" class="mbtn">SETTINGS</button></div>
     <div class="panel-row"><button id="btn-quit" class="mbtn ghost">LEAVE SERVER</button></div>
   </div>

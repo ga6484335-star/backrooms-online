@@ -48,6 +48,7 @@ export class MenuUI {
     };
     // in-game pause menu
     E('btn-resume').onclick = () => this.cb.resume();
+    E('btn-pause-journal') && (E('btn-pause-journal').onclick = () => this.cb.journal && this.cb.journal());
     E('btn-pause-settings').onclick = () => {
       this.settingsFromGame = true;
       E('settings-hint').classList.remove('hidden');

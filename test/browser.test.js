@@ -293,6 +293,40 @@ async function main() {
     const pauseClosed = await cdp.eval(`document.getElementById('pause-overlay').classList.contains('hidden')`);
     check(pauseClosed === true, 'pause closed after settings BACK');
 
+    // 10e. CASE FILE journal: records story fragments, opens, closes
+    const jHasBtn = await cdp.eval(`!!document.getElementById('btn-hud-journal')`);
+    check(jHasBtn === true, 'case-file button exists in HUD');
+    let jCount = 0;
+    for (let i = 0; i < 20; i++) {
+      jCount = await cdp.eval(`window.__dbg.journalCount()`);
+      if (jCount > 0) break;
+      await sleep(150);
+    }
+    check(jCount > 0, 'journal recorded arrival narration (' + jCount + ' entries)');
+    await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyJ'}))`);
+    await sleep(250);
+    const jOpen = await cdp.eval(`window.__dbg.journalOpen()`);
+    check(jOpen === true, 'J opens the case file');
+    const jText = await cdp.eval(`window.__dbg.journalText() || ''`);
+    check(/LEVEL\s+\d/.test(jText), 'case file renders the level heading');
+    check(jText.length > 0, 'case file shows recorded fragments');
+    const jNewCleared = await cdp.eval(`window.__dbg.journalHasNew() === false`);
+    check(jNewCleared === true, 'opening the case file clears the unread marker');
+    await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'Escape'}))`);
+    await sleep(200);
+    const jClosed = await cdp.eval(`window.__dbg.journalOpen() === false`);
+    check(jClosed === true, 'Esc closes the case file');
+    // reachable from the pause menu too
+    await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'Escape'}))`);
+    await sleep(250);
+    await cdp.eval(`document.getElementById('btn-pause-journal').click()`);
+    await sleep(250);
+    const jFromPause = await cdp.eval(`window.__dbg.journalOpen() === true && document.getElementById('pause-overlay').classList.contains('hidden')`);
+    check(jFromPause === true, 'pause menu opens the case file');
+    await cdp.eval(`document.getElementById('journal-close-btn').click()`);
+    await sleep(200);
+    check(await cdp.eval(`window.__dbg.journalOpen() === false`), 'CLOSE FILE dismisses the journal');
+
     // 11. SIT / STAND state machine: sit → stand → move; never stuck
     await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {code:'KeyC'}))`);
     await sleep(300);

@@ -23,7 +23,7 @@ import { noteText } from './notes.js';
 import { getLevel } from './levels.js';
 import { materialsFor } from './materials.js';
 import { ObjectiveTracker, objectiveSites, exitCellFor, loreCacheFor, cacheHintFor, hazardFor, hazardCells, hazardPhase, hazardDps, lootKindFor, puzzleSites, puzzleGoal, puzzleFor } from './objectives.js';
-import { introFor, epilogueFor, beatFor, ambientFor, radioFor, nextStoryLevel, isFinalLevel, levelTitle, ENDING } from './story.js';
+import { introFor, epilogueFor, beatFor, ambientFor, radioFor, nextStoryLevel, isFinalLevel, levelTitle, ENDING, newJournalRecord, recordJournal, journalEntriesFor } from './story.js';
 import { EndingSequence } from './ending.js';
 import { OpeningSequence } from './opening.js';
 import { TransitionSequence } from './transitions.js';
@@ -61,6 +61,8 @@ let doorToggles = new Map(); // "cx,cz,dir" -> boolean (net-synced; render state
 let keyInventory = new Set(); // held rusty keys
 let noteOverlayOpen = false;
 let loreOverlayOpen = false;
+let journalOverlayOpen = false;   // CASE FILE journal is open (pauses prompt/etc)
+let journal = newJournalRecord(); // local, deterministic story record (never networked)
 let flash = null;
 let dead = false;           // local player death state
 let respawnT = 0;           // seconds until respawn allowed
@@ -181,6 +183,7 @@ const menu = new MenuUI({
   leave() { leaveToMenu(); },
   applySettings,
   resume() { togglePause(false); E('settings-panel').classList.add('hidden'); },
+  journal() { togglePause(false); E('pause-overlay').classList.add('hidden'); E('settings-panel').classList.add('hidden'); openJournal(); },
   quit() { togglePause(false); leaveToMenu(); },
 });
 
@@ -670,6 +673,7 @@ function startGame(seed, level, opts = {}) {
   } else {
     openingDone = true;
     player.enabled = true;
+    recordIntro(level);
     showCinematic(introFor(level), 3, null);
   }
 
@@ -740,7 +744,7 @@ function finishOpening() {
   player.enabled = true;
   if (player.mobile && mobile) mobile.show(); else canvas.requestPointerLock?.().catch?.(() => {});
   // the room speaks the first beat, and a radio scrap comes through
-  setTimeout(() => { if (gameState === 'playing') showCinematic(introFor(0), 3, null); }, 900);
+  setTimeout(() => { if (gameState === 'playing') { recordIntro(0); showCinematic(introFor(0), 3, null); } }, 900);
   audio.distantMetal(0.5);
   if (monsters) monsters.escalate(0.6); // the world notices you landed
 }
@@ -796,6 +800,7 @@ function finishTransition(level) {
   gameState = 'playing';
   player.enabled = true;
   if (player.mobile && mobile) mobile.show(); else canvas.requestPointerLock?.().catch?.(() => {});
+  recordIntro(level);
   showCinematic(introFor(level), 3, null);
   if (monsters) {
     monsters.escalate(1.0); // arrival is loud; the world reacts
@@ -940,6 +945,7 @@ function doorPromptText(d) {
 
 function doInteract() {
   if (dead) return;
+  if (journalOverlayOpen) { closeJournal(); return; }
   if (loreOverlayOpen) { closeLore(); return; }
   if (noteOverlayOpen) { closeNote(); return; }
   const it = currentInteract;
@@ -1006,12 +1012,16 @@ function wireAmbientStory() {
     if (!world) return null;
     const lv = world.level;
     if (lv !== _ambLevel) { _ambLevel = lv; _ambIdx = 0; }
-    return ambientFor(lv, _ambIdx++);
+    const line = ambientFor(lv, _ambIdx++);
+    jot(lv, 'ambient', line, _ambIdx);
+    return line;
   };
   // and a separate pool of radio scraps, surfaced as their own event
   events.radioLine = () => {
     if (!world) return null;
-    return radioFor(world.level, radioIdx++);
+    const line = radioFor(world.level, radioIdx++);
+    jot(world.level, 'radio', line, radioIdx);
+    return line;
   };
 }
 
@@ -1036,7 +1046,9 @@ function onSiteActivated(site, beatIdx, remote) {
     monsters.alertArea(site.x, site.z, 34);
     monsters.escalate(1);
   }
-  if (!remote) showCinematic([beatFor(world.level, beatIdx)], 2, null);
+  const beatLine = beatFor(world.level, beatIdx);
+  jot(world.level, 'beat', beatLine, beatIdx);
+  if (!remote) showCinematic([beatLine], 2, null);
   // every so often the room leaks a clue about its hidden cache — the pull that
   // sends a curious player off the path (delivered as ambient narration, once)
   if (beatIdx === 1 && world && !cacheHintShown.has(world.level)) {
@@ -1259,6 +1271,7 @@ function showLore(it) {
   const ov = E('lore-overlay');
   if (ov) ov.classList.remove('hidden');
   loreOverlayOpen = true;
+  jot(world ? world.level : 0, 'cache', `${lore.title}\n${lore.body}`, it.key || lore.title);
   if (voice) voice.speak(`— ${lore.title}. ${lore.body}`, { mood: 'whisper' });
   audio.paper();
 }
@@ -1270,6 +1283,83 @@ function closeLore() {
   if (voice) voice.stop();
   audio.paper();
   if (player.mobile && mobile) mobile.show();
+}
+
+// ---- CASE FILE: the journal of everything the party has heard --------------
+// Pure, local, deterministic. `jot` records a fragment the first time it is
+// heard; the overlay renders the whole file grouped by level. Because it never
+// touches the network it cannot desync the shared world.
+const JOURNAL_KIND_LABEL = { intro: 'ON ARRIVAL', beat: 'INTAKE NODE', cache: 'RECOVERED ARCHIVE', ambient: 'OVERHEARD', radio: 'RADIO TRAFFIC' };
+
+function jot(level, kind, text, key = null) {
+  if (recordJournal(journal, level, kind, text, key)) {
+    const btn = E('btn-hud-journal');
+    if (btn && !journalOverlayOpen) btn.classList.add('has-new');
+  }
+}
+
+// The arrival narration is the spine of the file; record every line.
+function recordIntro(level) {
+  introFor(level).forEach((line, i) => jot(level, 'intro', line, i));
+}
+
+function renderJournal() {
+  const body = E('journal-body');
+  if (!body) return;
+  const entries = journalEntriesFor(journal);
+  body.innerHTML = '';
+  if (!entries.length) {
+    const p = document.createElement('div');
+    p.className = 'journal-empty';
+    p.textContent = 'NOTHING RECORDED YET. TOUCH AN INTAKE NODE, FIND A HIDDEN ARCHIVE, LISTEN.';
+    body.appendChild(p);
+    return;
+  }
+  let curLevel = null;
+  for (const e of entries) {
+    if (e.level !== curLevel) {
+      curLevel = e.level;
+      const h = document.createElement('h3');
+      h.className = 'journal-level';
+      h.textContent = `LEVEL ${e.level} — ${levelTitle(e.level)}`;
+      body.appendChild(h);
+    }
+    const row = document.createElement('div');
+    row.className = 'journal-entry';
+    const kind = document.createElement('span');
+    kind.className = 'journal-kind';
+    kind.textContent = JOURNAL_KIND_LABEL[e.kind] || e.kind.toUpperCase();
+    const txt = document.createElement('div');
+    txt.className = 'journal-text';
+    txt.textContent = e.text;
+    row.appendChild(kind);
+    row.appendChild(txt);
+    body.appendChild(row);
+  }
+}
+
+function openJournal() {
+  if (journalOverlayOpen) return;
+  renderJournal();
+  const ov = E('journal-overlay');
+  if (ov) ov.classList.remove('hidden');
+  journalOverlayOpen = true;
+  const btn = E('btn-hud-journal');
+  if (btn) btn.classList.remove('has-new');
+  audio.paper();
+}
+
+function closeJournal() {
+  if (!journalOverlayOpen) return;
+  journalOverlayOpen = false;
+  const ov = E('journal-overlay');
+  if (ov) ov.classList.add('hidden');
+  if (player.mobile && mobile) mobile.show();
+}
+
+function toggleJournal() {
+  if (journalOverlayOpen) closeJournal();
+  else openJournal();
 }
 
 // ---- loot: risk/reward pickups left on hazard cells ------------------------
@@ -1428,6 +1518,21 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+// case-file overlay controls (same interaction grammar as notes/lore)
+for (const id of ['journal-close-btn', 'journal-x']) {
+  const el = E(id);
+  if (!el) continue;
+  el.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); closeJournal(); });
+  el.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); closeJournal(); }, { passive: false });
+}
+{
+  const ov = E('journal-overlay');
+  if (ov) ov.addEventListener('touchstart', (e) => {
+    if (e.target === ov) { e.preventDefault(); closeJournal(); }
+  }, { passive: false });
+}
+E('btn-hud-journal')?.addEventListener('click', (e) => { e.preventDefault(); toggleJournal(); });
+
 function doEmote(e) {
   if (dead) return;
   player.triggerEmote(e);
@@ -1527,6 +1632,13 @@ window.addEventListener('keydown', (e) => {
   if (cinematic && (e.code === 'KeyE' || e.code === 'Space' || e.code === 'Enter')) {
     e.preventDefault(); skipCinematic(); return;
   }
+  // the CASE FILE overlay closes first (J toggles, Esc/X dismiss)
+  if (journalOverlayOpen) {
+    if (e.code === 'KeyJ' || e.code === 'Escape' || e.code === 'KeyX') {
+      e.preventDefault(); closeJournal();
+    }
+    return;
+  }
   if (paused) {
     if (e.code === 'Escape') togglePause(false);
     return;
@@ -1534,6 +1646,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyE') doInteract();
   if (e.code === 'Escape') togglePause();
   if (e.code === 'KeyQ') doScream();
+  if (e.code === 'KeyJ') toggleJournal(); // CASE FILE
   if (e.code === 'KeyC') doEmote('sit'); // sit/stand toggle
   if (e.code === 'KeyF' && !dead && flash) flash.toggle();
   if (e.code === 'KeyG' && !dead && !cinematic) {
@@ -2060,7 +2173,7 @@ function loop() {
   // interact prompt
   currentInteract = dead ? null : findInteractable();
   const prompt = E('interact-prompt');
-  if (currentInteract && !noteOverlayOpen && !loreOverlayOpen) {
+  if (currentInteract && !noteOverlayOpen && !loreOverlayOpen && !journalOverlayOpen) {
     prompt.classList.remove('hidden');
     E('interact-text').textContent =
       currentInteract.type === 'note' ? 'READ NOTE'
@@ -2133,6 +2246,10 @@ function leaveToMenu() {
   E('ending-overlay').classList.add('hidden');
   noteOverlayOpen = false;
   loreOverlayOpen = false;
+  journalOverlayOpen = false;
+  E('journal-overlay')?.classList.add('hidden');
+  E('btn-hud-journal')?.classList.remove('has-new');
+  journal = newJournalRecord(); // a new run begins a new case file
   cinematic = null;
   voice.stop();
   objectives = null;
@@ -2238,6 +2355,16 @@ window.__dbg = {
   setElapsed: (v) => { startTime = performance.now() - v * 1000; },
   loreOpen: () => loreOverlayOpen,
   loreShown: () => (loreOverlayOpen ? { title: E('lore-title') ? E('lore-title').textContent : null, body: E('lore-body') ? E('lore-body').textContent : null } : null),
+  // CASE FILE journal: deterministic, local, never networked
+  journal: () => journalEntriesFor(journal),
+  journalCount: () => journalEntriesFor(journal).length,
+  journalOpen: () => journalOverlayOpen,
+  journalOpenFn: () => openJournal(),
+  journalCloseFn: () => closeJournal(),
+  journalToggle: () => toggleJournal(),
+  journalText: () => (journalOverlayOpen && E('journal-body') ? E('journal-body').textContent : null),
+  journalHasNew: () => !!(E('btn-hud-journal') && E('btn-hud-journal').classList.contains('has-new')),
+  journalIntro: (level) => { recordIntro(level); return journalEntriesFor(journal).length; },
   openCache: () => {
     if (!world) return false;
     const c = loreCacheFor(world, world.level);

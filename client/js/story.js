@@ -431,3 +431,62 @@ export function nextStoryLevel(level) {
 }
 
 export function isFinalLevel(level) { return level === FINAL_LEVEL; }
+
+// ---------------------------------------------------------------------------
+// CASE FILE — the player's journal. Every story fragment the party encounters
+// (level intros, intake-node beats, hidden-cache archives, rare whispers and
+// radio scraps) is written here as it is heard, so the narrative is not lost
+// the moment a one-shot cinematic ends. It is purely local and deterministic:
+// it never touches the network, so it cannot desync the shared world.
+//
+// `recordJournal` mutates a plain record (created by `newJournalRecord`). The
+// record is `{ [level]: { [kind:key]: { kind, key, level, title, text } } }`,
+// insertion-ordered per level and de-duplicated by kind:key.
+export function newJournalRecord() { return {}; }
+
+// Cap ambient/radio so a long session cannot grow the file without bound. The
+// authored intros, beats and cache archives are always kept.
+export const JOURNAL_LIMITS = { ambient: 8, radio: 6 };
+
+// Build the stable de-dup key for a fragment. Exported so tests can assert the
+// exact identity a record will use.
+export function journalKey(level, kind, key) { return `${level}:${kind}:${key}`; }
+
+// Returns true if the fragment was newly recorded (false if already present or
+// dropped by a cap). Mutates `rec` in place.
+export function recordJournal(rec, level, kind, text, key = null) {
+  if (!rec || !text) return false;
+  const lv = (rec[level] = rec[level] || {});
+  const k = key == null ? String(text).slice(0, 48) : String(key);
+  const id = journalKey(level, kind, k);
+  if (lv[id]) return false;
+  const cap = JOURNAL_LIMITS[kind];
+  if (cap != null) {
+    let n = 0;
+    for (const other of Object.keys(lv)) if (other.split(':')[1] === kind) n++;
+    if (n >= cap) return false;
+  }
+  lv[id] = { kind, key: k, level, text: String(text) };
+  return true;
+}
+
+// The journal as an ordered, render-ready list. Levels ascend, and within a
+// level the authored narrative reads in story order: intro, then the intake
+// beats, then the archives the party recovered, then atmosphere. This is a
+// pure function of the record — the HUD simply renders what it returns.
+const JOURNAL_KIND_ORDER = ['intro', 'beat', 'cache', 'ambient', 'radio'];
+export function journalEntriesFor(rec) {
+  if (!rec) return [];
+  const levels = Object.keys(rec).map(Number).sort((a, b) => a - b);
+  const out = [];
+  for (const lv of levels) {
+    const items = Object.values(rec[lv] || {});
+    items.sort((a, b) => {
+      const ka = JOURNAL_KIND_ORDER.indexOf(a.kind), kb = JOURNAL_KIND_ORDER.indexOf(b.kind);
+      if (ka !== kb) return ka - kb;
+      return 0; // insertion order within a kind is preserved by Object.values
+    });
+    for (const it of items) out.push(it);
+  }
+  return out;
+}
