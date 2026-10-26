@@ -909,9 +909,14 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyE') doInteract();
   if (e.code === 'Escape') togglePause();
   if (e.code === 'KeyQ') doScream();
+  if (e.code === 'KeyB') player.holdingBreath = true;
   if (e.code === 'KeyC') doEmote('sit'); // sit/stand toggle
   if (e.code === 'KeyF' && !dead && flash) flash.toggle();
   if (e.code === 'KeyR' && dead && respawnT <= 0) respawn();
+});
+window.addEventListener('keyup', (e) => {
+  if (gameState !== 'playing') return;
+  if (e.code === 'KeyB') player.holdingBreath = false;
 });
 canvas.addEventListener('click', () => {
   if (gameState === 'playing' && !player.mobile && !document.pointerLockElement) {
@@ -1094,6 +1099,20 @@ function updateBatteryHud() {
   const segs = Math.round(flash.battery / 25);
   el.textContent = '▮'.repeat(segs) + '▯'.repeat(4 - segs);
   el.classList.toggle('low', flash.battery < 25);
+}
+
+function updateStaminaHud() {
+  const sEl = E('hud-stamina');
+  const bEl = E('hud-breath');
+  if (sEl) sEl.style.width = player.stamina + '%';
+  if (bEl) {
+    if (player.holdingBreath) {
+      bEl.style.width = (player.stamina) + '%';
+      bEl.parentElement.classList.remove('hidden');
+    } else {
+      bEl.parentElement.classList.add('hidden');
+    }
+  }
 }
 
 // spectator camera: hover near the next living teammate (found-footage style)
@@ -1283,6 +1302,7 @@ function loop() {
   lightMgr.update(dt, player.pos.x, player.pos.z, camera);
   if (flash) flash.update(dt);
   updateBatteryHud();
+  updateStaminaHud();
   remotePlayers.update(dt, camera.position);
   monsters.update(dt, player, remotePlayers, null);
   events.update(dt, player);
@@ -1322,7 +1342,7 @@ function loop() {
   player._sendAcc = (player._sendAcc || 0) + dt;
   if (net.connected && player._sendAcc > 0.05) {
     player._sendAcc = 0;
-    net.sendState(player.pos.x, player.pos.y, player.pos.z, player.yaw, player.pitch, player.anim, player.emote, player.flashOn, dead);
+    net.sendState(player.pos.x, player.pos.y, player.pos.z, player.yaw, player.pitch, player.anim, player.emote, player.flashOn, dead, player.holdingBreath);
   }
 
   // interact prompt
@@ -1539,6 +1559,9 @@ window.__dbg = {
 // boot message fades only after at least one frame has run, so we know
 // the module graph actually executed (not a bare module-load failure).
 requestAnimationFrame(() => E('boot-msg').classList.add('gone'));
+// Fallback: if browser hangs, force-show menu after 2s
+setTimeout(() => E('boot-msg').classList.add('gone'), 2000);
+
 setTimeout(() => {
   const f = E('fade');
   f.style.transition = 'opacity 2s ease';

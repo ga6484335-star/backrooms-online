@@ -333,8 +333,12 @@ export class MonsterSystem {
         }
       }
       if (m.def.hearing > 0 && nd < m.def.hearing) {
-        if (p.anim === 'run' && nd < HEAR_RUN) heard = true;
-        else if (p.anim === 'walk' && nd < HEAR_WALK) heard = true;
+        // If holding breath, noise footprint is drastically reduced
+        const isHoldingBreath = p.holdingBreath || (p.anim === 'holdbreath');
+        const hearRunThreshold = isHoldingBreath ? HEAR_RUN * 0.35 : HEAR_RUN;
+        const hearWalkThreshold = isHoldingBreath ? HEAR_WALK * 0.2 : HEAR_WALK;
+        if (p.anim === 'run' && nd < hearRunThreshold) heard = true;
+        else if (p.anim === 'walk' && nd < hearWalkThreshold) heard = true;
       }
       // flashlight cone: is this player shining their beam on the monster?
       // dx,dz point monster->player, so the player->monster direction is -dx,-dz

@@ -54,6 +54,10 @@ export class PlayerController {
     this.jumpCd = 0;
     this.landDip = 0;        // camera dip on landing
 
+    // Stamina & Breath Mechanics
+    this.stamina = 100;
+    this.holdingBreath = false;
+
     if (!this.mobile) this._bindDesktop();
   }
 
@@ -93,10 +97,12 @@ export class PlayerController {
       this.keys.add(e.code);
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.running = true;
       if (e.code === 'Space') { this.jump(); e.preventDefault(); }
+      if (e.code === 'KeyB') this.holdingBreath = true;
     });
     window.addEventListener('keyup', (e) => {
       this.keys.delete(e.code);
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.running = false;
+      if (e.code === 'KeyB') this.holdingBreath = false;
     });
     window.addEventListener('mousemove', (e) => {
       if (!this.enabled || document.pointerLockElement === null) return;
@@ -121,9 +127,8 @@ export class PlayerController {
   // current noise signature in meters (how far footsteps carry)
   noiseLevel() {
     if (this.dead || this.sitting) return 0;
-    if (this.anim === 'run') return 24;
-    if (this.anim === 'walk') return 8;
-    return 0;
+    const base = this.anim === 'run' ? 24 : (this.anim === 'walk' ? 8 : 0);
+    return this.holdingBreath ? base * 0.3 : base;
   }
 
   eyeHeight() { return this.sitting ? 1.0 : EYE; }
@@ -162,13 +167,26 @@ export class PlayerController {
     // any movement input while sitting automatically stands you up
     if (this.sitting && moving) this.standUp();
 
+    // Stamina/Breath Drain
+    const isSprinting = this.running && moving;
+    if (isSprinting || this.holdingBreath) {
+      let drain = isSprinting ? 25 * dt : 15 * dt;
+      this.stamina = Math.max(0, this.stamina - drain);
+      if (this.stamina === 0 && this.holdingBreath) this.holdingBreath = false;
+    } else {
+      this.stamina = Math.min(100, this.stamina + 20 * dt);
+    }
+    if (this.stamina > 0 && this.holdingBreath && !moving && !isSprinting) {
+        // Still holding breath while not moving consumes less
+    }
+
     // smooth turning with inertia
     const turnSpeed = 14;
     this.yaw += (this.yawTarget - this.yaw) * Math.min(1, dt * turnSpeed);
     this.pitch += (this.pitchTarget - this.pitch) * Math.min(1, dt * turnSpeed);
 
     // ---- movement ----
-    const speed = this.sitting ? 0 : (this.running ? RUN : WALK) * inputMag;
+    const speed = this.sitting ? 0 : ((this.running && this.stamina > 0) ? RUN : WALK) * inputMag;
     const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
     const fx = -sin, fz = -cos;
     const rx = cos, rz = -sin;

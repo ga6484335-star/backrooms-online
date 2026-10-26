@@ -12,7 +12,8 @@
     "test:all": "node test/multiplayer.test.js && node test/worldgen.test.mjs && node test/monsters.test.mjs && node test/objectives.test.mjs && node test/browser.test.js && node test/browser2p.test.js",
     "test:world": "node test/worldgen.test.mjs",
     "test:objectives": "node test/objectives.test.mjs",
-    "test:pages": "node test/pages.test.js"
+    "test:pages": "node test/pages.test.js",
+    "build": "echo 'Build step not required'"
   },
   "keywords": [
     "backrooms",
@@ -27,7 +28,7 @@
     "compression": "^1.8.1",
     "express": "^5.2.1",
     "three": "^0.185.1",
-    "ws": "^8.21.3"
+    "ws": "^8.22.0"
   },
   "engines": {
     "node": ">=18"

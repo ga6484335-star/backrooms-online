@@ -97,6 +97,13 @@ export class MobileControls {
       run.classList.toggle('on', this.player.mobileRun);
     }, { passive: false });
 
+    const breathBtn = document.getElementById('mb-breath');
+    breathBtn.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      this.player.holdingBreath = !this.player.holdingBreath;
+      breathBtn.classList.toggle('on', this.player.holdingBreath);
+    }, { passive: false });
+
     document.getElementById('mb-interact').addEventListener('touchstart', (e) => {
       e.preventDefault();
       this.onInteract();
