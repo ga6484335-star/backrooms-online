@@ -30,6 +30,12 @@ export class PlayerController {
     this.running = false;
     this.bobT = 0;
     this.swayT = 0;
+    // turn-roll: the camera banks into a turn (rolls left when turning left),
+    // plus a small lateral lean when strafing. Both are damped, never snapped.
+    this.yawVel = 0;        // smoothed yaw angular velocity (rad/s)
+    this.turnRoll = 0;      // current roll contributed by turning (rad)
+    this.strafeLean = 0;    // current roll contributed by strafing (rad)
+    this.prevYaw = 0;
     this.speedSmooth = 0;
     this.shake = 0;            // external trauma (monster near, caught)
     this.focusT = 0;           // focus hunting phase
@@ -118,10 +124,21 @@ export class PlayerController {
   clearJoystick() { this.joy.x = 0; this.joy.y = 0; this.joy.active = false; }
   addLook(dx, dy) { this.lookDelta.x += dx; this.lookDelta.y += dy; }
 
+  // QA hook: applies a look delta exactly like the desktop mousemove handler,
+  // but without requiring pointer lock (headless capture cannot acquire it).
+  debugLook(dx, dy) {
+    const s = 0.0021 * this.sensitivity;
+    this.yawTarget -= dx * s;
+    this.pitchTarget = THREE.MathUtils.clamp(this.pitchTarget - dy * s, -1.45, 1.45);
+  }
+
   teleport(x, z) {
     this.pos.set(x, EYE, z);
     this.vel.set(0, 0, 0);
     this.yOff = 0; this.vy = 0; this.grounded = true; this.jumpCd = 0;
+    // a teleport is a discontinuity: kill the turn-roll state so the camera
+    // does not bank on the first frame after the jump.
+    this.yawVel = 0; this.turnRoll = 0; this.strafeLean = 0; this.prevYaw = this.yaw;
   }
 
   // current noise signature in meters (how far footsteps carry)
@@ -241,6 +258,29 @@ export class PlayerController {
     const swayYaw = (Math.sin(t * 0.53) * 0.4 + Math.sin(t * 1.7 + 1.3) * 0.25 + Math.sin(t * 4.1) * 0.1) * 0.006;
     const swayPitch = (Math.sin(t * 0.61 + 2) * 0.35 + Math.sin(t * 2.3) * 0.2) * 0.005;
     const swayRoll = (Math.sin(t * 0.47 + 4) * 0.3 + Math.sin(t * 1.9 + 1) * 0.2) * 0.008;
+
+    // ---- turn roll + head lean ----
+    // The camera banks into a turn the way a head does: turning left rolls the
+    // view left (negative z-rotation in this YXZ convention), and it settles
+    // back to level when the turn stops. Roll is driven by *smoothed* yaw
+    // velocity so a flick of the mouse produces a fast, visible bank, while a
+    // slow sweep produces a gentle one. Peak is ~7 degrees during a fast turn.
+    let dyaw = this.yaw - this.prevYaw;
+    if (dyaw > Math.PI) dyaw -= Math.PI * 2; else if (dyaw < -Math.PI) dyaw += Math.PI * 2;
+    this.prevYaw = this.yaw;
+    const yawRate = dt > 0 ? THREE.MathUtils.clamp(dyaw / dt, -10, 10) : 0;
+    // smooth the rate so single-frame mouse spikes do not snap the horizon
+    this.yawVel += (yawRate - this.yawVel) * Math.min(1, dt * 9);
+    const TURN_ROLL_MAX = 0.122;   // ~7 degrees at full bank
+    const TURN_RATE_REF = 1.6;     // rad/s that maps to full roll (a brisk turn)
+    const targetTurnRoll = -THREE.MathUtils.clamp(this.yawVel / TURN_RATE_REF, -1, 1) * TURN_ROLL_MAX;
+    this.turnRoll += (targetTurnRoll - this.turnRoll) * Math.min(1, dt * 7);
+
+    // strafe lean: a small roll toward the direction of lateral travel
+    const localRight = (this.vel.x * cos - this.vel.z * sin);
+    const targetLean = -THREE.MathUtils.clamp(localRight / RUN, -1, 1) * 0.05; // ~2.9 deg
+    this.strafeLean += (targetLean - this.strafeLean) * Math.min(1, dt * 4);
+
     // micro shake
     this.shake = Math.max(0, this.shake - dt * 1.5);
     const micro = 0.0012 + this.shake * 0.01;
@@ -267,15 +307,17 @@ export class PlayerController {
 
     // camera placement (camera is world-anchored; player group is for avatar)
     const eyeH = this.eyeHeight();
+    // head lean: the eye shifts slightly toward the inside of the turn
+    const leanX = Math.sin(this.turnRoll) * 0.06 + Math.sin(this.strafeLean) * 0.03;
     this.camera.position.set(
-      this.pos.x + bobX * 0.3,
+      this.pos.x + bobX * 0.3 + leanX,
       eyeH + this.yOff + bobY + Math.sin(t * 0.8) * 0.004 - this.landDip,
       this.pos.z
     );
     this.camera.rotation.order = 'YXZ';
     this.camera.rotation.y = this.yaw + swayYaw + mx;
     this.camera.rotation.x = this.pitch + swayPitch + my;
-    this.camera.rotation.z = swayRoll * 0.6 + bobX * 0.15;
+    this.camera.rotation.z = this.turnRoll + this.strafeLean + swayRoll * 0.6 + bobX * 0.15;
 
     // pos.y = networked eye height (includes jump offset so remotes see hops)
     this.pos.y = eyeH + this.yOff;

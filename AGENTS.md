@@ -12,6 +12,22 @@
 - Watchdog: `/tmp/backrooms-watchdog.sh` restarts `node server/index.js` when it dies. To deploy new code: `kill $(pgrep -f "node server/index.js")` — watchdog respawns it.
 - Live URL: https://work-1-aqisgfbtgpjkucrl.prod-runtime.all-hands.dev/ (port 12000).
 
+## Graphics / rendering pipeline
+- Pipeline: `renderer.js` builds Scene + `PerspectiveCamera(72)`, `EffectComposer` = RenderPass -> Bloom -> VHS shader -> OutputPass. ACESFilmic tone mapping, exposure 1.0, `shadowMap.enabled = false` (point-light shadows too costly; AO is faked with baked vertex tints).
+- **Surface materials come from `textures.js` recipes** (`wallpaperSurface`, `carpetSurface`, `ceilingTileSurface`, `concreteSurface`, `metalSurface`, `tileSurface`, `woodSurface`, `fixtureSurface`). Each returns `{albedo, roughness, normal}` as `Uint8ClampedArray` height-derived maps; `materials.js` turns them into `MeshStandardMaterial`s.
+- **Height-field normalisation is the key to visible relief.** Procedural height fields have a tiny dynamic range, so raw normal maps come out nearly flat (std ~6/255) and roughness maps nearly constant. `stretchHeight()` in textures.js percentile-normalises the field before the Sobel/normal pass — do not remove it, and re-check map std after changing a recipe.
+- **Geometry is split per surface in `world/chunk.js`.** One merged buffer per material: `gb` (walls), `gbFloor`, `gbCeil`, `gbProp`, `gbTrim`, `gbWater`, `gbEmiss`. Previously every surface shared `mats.wall`, which is why material edits had almost no visible effect — keep the split.
+- **Ambient light + IBL wash out normal-map relief.** Both add a constant term that does not vary with the surface normal. Measured: halving ambient/IBL roughly doubles visible surface contrast (local std/mean 0.054 -> 0.101). `renderer.js` keeps `environmentIntensity` low (0.14) and `levels.js` ambientI ~0.22-0.30 with lightI 12-20 so the fluorescent fixtures do the directional work. Raising ambient back up will flatten the walls again.
+- **Auto-exposure hides lighting changes.** `engine.adaptExposure(brightness, dt)` (called each frame in main.js) compensates for ambient edits. To measure a lighting change you must stub it (`engine.adaptExposure = function(){...}`) or the A/B will look identical.
+- **Camera roll:** `player.js` derives smoothed yaw angular velocity, maps it to a bank (`TURN_ROLL_MAX` ~7 deg, `TURN_RATE_REF` 1.6 rad/s), plus a strafe lean (~2.9 deg) and a lateral head lean. Roll is a separate `turnRoll`/`strafeLean` term added to the existing handheld sway — the base sway roll must stay, it is what makes the found-footage look. Peak measured: ~4.7 deg on a mouse flick, ~6.6 deg on a sustained sweep.
+
+## Visual QA (headless capture)
+- `?seed=<n>` in the URL forces a known world so before/after screenshots are of an identical map (opt-in; `main.js startGame`). Use it for any visual diff.
+- `window.__dbg` also exposes `scene()`, `engine()`, `cam()` (roll in degrees), `seed()`, `look(dx,dy)` for headless capture (pointer lock is unavailable in headless).
+- `test/browser.test.js` and friends already run headless Chromium + CDP with SwiftShader.
+- **Measuring texture/lighting from a screenshot:** compare *relative* quantities (local std / local mean, or stripe modulation of the column profile). Absolute pixel contrast is confounded by exposure and by the film grain / scanline shader. Set `vhs.uniforms.uGrain/uScan = 0` before measuring, or grain (0.055 amplitude) dominates the high-frequency energy.
+- A near-black baseline (crushed blacks) produces fake "detail" from 8-bit banding — check the patch mean before trusting a contrast number.
+
 ## Tests (all must stay green)
 - `node test/worldgen.test.mjs` — deterministic worldgen + monster defs (46 assertions).
 - `node test/multiplayer.test.js` — server protocol, two ws clients.

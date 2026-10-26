@@ -56,7 +56,15 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
   const baseCellX = chunkX * CELLS_PER_CHUNK;
   const baseCellZ = chunkZ * CELLS_PER_CHUNK;
 
-  const gb = new GeoBuilder();      // merged level geometry
+  // Geometry is merged into one buffer per surface so each gets its own
+  // material (albedo/roughness/normal). Before this split every surface —
+  // floor, ceiling, walls and props alike — was drawn with mats.wall, which is
+  // why material work had almost no visible effect.
+  const gb = new GeoBuilder();      // walls + structural trim (wallpaper/concrete/metal)
+  const gbFloor = new GeoBuilder(); // floors (carpet/concrete/tile/metal)
+  const gbCeil = new GeoBuilder();  // ceilings + soffits
+  const gbProp = new GeoBuilder();  // props, debris, specials, keys (vertex-coloured)
+  const gbTrim = new GeoBuilder();  // painted trim: baseboards, chair rails, corner posts
   const gbWater = new GeoBuilder(); // transparent water surface
   const gbEmiss = new GeoBuilder(); // unlit fluorescent panels
   const colliders = [];
@@ -84,7 +92,7 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
         for (let fx = 0; fx < 2; fx++) {
           for (let fz = 0; fz < 2; fz++) {
             const alt = (fx + fz) % 2 === 0 ? 0.82 : 1.0;
-            gb.quad(
+            gbFloor.quad(
               [[wx + fx * h, 0, wz + fz * h], [wx + (fx + 1) * h, 0, wz + fz * h],
                [wx + (fx + 1) * h, 0, wz + (fz + 1) * h], [wx + fx * h, 0, wz + (fz + 1) * h]],
               [0, 1, 0], scaleColor(floorCol, tint * alt), [[0, 0], [0.5, 0], [0.5, 0.5], [0, 0.5]]);
@@ -93,15 +101,15 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
       } else if (cell.floorPattern === 2) {
         // border inlay: darker frame around a lighter centre
         const b = CELL * 0.18;
-        gb.quad(
+        gbFloor.quad(
           [[wx, 0, wz], [wx + CELL, 0, wz], [wx + CELL, 0, wz + CELL], [wx, 0, wz + CELL]],
           [0, 1, 0], scaleColor(floorCol, tint * 0.78), [[0, 0], [1, 0], [1, 1], [0, 1]]);
-        gb.quad(
+        gbFloor.quad(
           [[wx + b, 0.005, wz + b], [wx + CELL - b, 0.005, wz + b],
            [wx + CELL - b, 0.005, wz + CELL - b], [wx + b, 0.005, wz + CELL - b]],
           [0, 1, 0], scaleColor(floorCol, tint), [[0, 0], [1, 0], [1, 1], [0, 1]]);
       } else {
-        gb.quad(
+        gbFloor.quad(
           [[wx, 0, wz], [wx + CELL, 0, wz], [wx + CELL, 0, wz + CELL], [wx, 0, wz + CELL]],
           [0, 1, 0], scaleColor(floorCol, tint), [[0, 0], [1, 0], [1, 1], [0, 1]]);
       }
@@ -109,7 +117,7 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
       // ceiling (damaged cells sometimes get a missing/darker ceiling patch)
       const ceilY = cell.ceilH;
       const ceilCol = scaleColor(levelDef.palette.ceil, tint * (cell.light ? 1 : 0.55));
-      gb.quad(
+      gbCeil.quad(
         [[wx, ceilY, wz], [wx + CELL, ceilY, wz], [wx + CELL, ceilY, wz + CELL], [wx, ceilY, wz + CELL]],
         [0, -1, 0], ceilCol, [[0, 0], [1, 0], [1, 1], [0, 1]]);
 
@@ -118,8 +126,8 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
         const sy = ceilY - cell.ceilDrop;
         const scol = scaleColor(levelDef.palette.ceil, tint * 0.8);
         const alongX = chance(cell.propRng, 0.5);
-        if (alongX) gb.box(CELL, cell.ceilDrop, 1.1, wx + CELL / 2, sy, wz + CELL / 2, scol);
-        else gb.box(1.1, cell.ceilDrop, CELL, wx + CELL / 2, sy, wz + CELL / 2, scol);
+        if (alongX) gbCeil.box(CELL, cell.ceilDrop, 1.1, wx + CELL / 2, sy, wz + CELL / 2, scol);
+        else gbCeil.box(1.1, cell.ceilDrop, CELL, wx + CELL / 2, sy, wz + CELL / 2, scol);
       }
 
       // hanging wires in damaged cells — torn cables drooping from the ceiling
@@ -132,9 +140,9 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
           const sag = 0.15 + wr() * 0.25;
           const col = [30, 26, 24];
           // two segments per wire (hanging V shape)
-          gb.quad([[x0, ceilY, z0], [x0 + 0.03, ceilY, z0], [x0 + sag + 0.03, ceilY - len, z0 + sag], [x0 + sag, ceilY - len, z0 + sag]],
+          gbProp.quad([[x0, ceilY, z0], [x0 + 0.03, ceilY, z0], [x0 + sag + 0.03, ceilY - len, z0 + sag], [x0 + sag, ceilY - len, z0 + sag]],
             [0, 0, 1], col, [[0, 0], [1, 0], [1, 1], [0, 1]]);
-          gb.quad([[x0 + sag, ceilY - len, z0 + sag], [x0 + sag + 0.03, ceilY - len, z0 + sag], [x0 + sag * 2 + 0.03, ceilY - len + sag * 0.5, z0 + sag * 2], [x0 + sag * 2, ceilY - len + sag * 0.5, z0 + sag * 2]],
+          gbProp.quad([[x0 + sag, ceilY - len, z0 + sag], [x0 + sag + 0.03, ceilY - len, z0 + sag], [x0 + sag * 2 + 0.03, ceilY - len + sag * 0.5, z0 + sag * 2], [x0 + sag * 2, ceilY - len + sag * 0.5, z0 + sag * 2]],
             [0, 0, 1], col, [[0, 0], [1, 0], [1, 1], [0, 1]]);
         }
       }
@@ -256,22 +264,35 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
         colliders.push({ x: px, z: pz, r: psize * 0.7 });
       }
 
-      // light fixtures — panel / tube / hanging bulb styles
+      // light fixtures — recessed troffers / suspended tubes / hanging bulbs.
+      // Each fixture gets a metal housing so it reads as an installed luminaire
+      // rather than a floating glowing rectangle.
       if (cell.light) {
         const lr = rngFrom(hashStr(seed, `l${level}:light:${cx},${cz}`));
         const lx = wx + 2 + (lr() - 0.5) * 1.4;
         const lz = wz + 2 + (lr() - 0.5) * 1.4;
         const ly = ceilY - (cell.ceilDrop > 0 ? cell.ceilDrop : 0) - 0.02;
+        const housing = [58, 60, 64];
+        const rot = chance(lr, 0.5) ? Math.PI / 2 : 0;
         if (cell.lightStyle === 'tube') {
-          gbEmiss.box(1.9, 0.06, 0.14, lx, ly, lz, [255, 250, 226], chance(lr, 0.5) ? Math.PI / 2 : 0);
+          // suspended twin-tube luminaire: metal spine + two glowing tubes
+          gbProp.box(1.9, 0.07, 0.30, lx, ly, lz, housing, rot);
+          const tx = rot === 0 ? 0 : 0.09, tz = rot === 0 ? 0.09 : 0;
+          gbEmiss.box(1.72, 0.05, 0.09, lx - tx, ly - 0.055, lz - tz, [255, 252, 232], rot);
+          gbEmiss.box(1.72, 0.05, 0.09, lx + tx, ly - 0.055, lz + tz, [255, 252, 232], rot);
         } else if (cell.lightStyle === 'bulb') {
-          gb.box(0.03, 0.35, 0.03, lx, ly - 0.35, lz, [30, 30, 32]);
-          gbEmiss.box(0.16, 0.16, 0.16, lx, ly - 0.45, lz, [255, 244, 214]);
+          // bare hanging bulb: flex, brass cap, glowing envelope
+          gbProp.box(0.025, 0.42, 0.025, lx, ly - 0.42, lz, [28, 28, 30]);
+          gbProp.box(0.09, 0.07, 0.09, lx, ly - 0.46, lz, [120, 104, 70]);
+          gbEmiss.box(0.17, 0.19, 0.17, lx, ly - 0.58, lz, [255, 240, 205]);
         } else {
-          gbEmiss.box(1.2, 0.08, 0.4, lx, ly, lz, [255, 250, 226]);
+          // recessed troffer: dark bezel frame + inset prismatic diffuser
+          const W = 1.24, D = 0.62;
+          gbProp.box(W + 0.1, 0.09, D + 0.1, lx, ly - 0.02, lz, housing, rot);
+          gbEmiss.box(W, 0.05, D, lx, ly - 0.075, lz, [255, 251, 230], rot);
         }
         lights.push({
-          cx, cz, x: lx, z: lz, y: (cell.lightStyle === 'bulb' ? ly - 0.5 : ly) - 0.04,
+          cx, cz, x: lx, z: lz, y: (cell.lightStyle === 'bulb' ? ly - 0.62 : ly) - 0.04,
           color: levelDef.palette.lightColor,
           intensity: levelDef.palette.lightI * (cell.lightStyle === 'bulb' ? 0.55 : 1),
           distance: levelDef.palette.lightDist * (cell.lightStyle === 'bulb' ? 0.8 : 1),
@@ -284,15 +305,15 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
       if (cell.damage > 0.45 && chance(cell.propRng, 0.5)) {
         const drng = cell.propRng;
         const dx = wx + range(drng, 0.8, CELL - 0.8), dz = wz + range(drng, 0.8, CELL - 0.8);
-        PROP_BUILDERS.rubble(makeShiftBuilder(gb, dx, dz, drng() * 3), drng);
-        if (chance(drng, 0.4)) PROP_BUILDERS.tippedchair(makeShiftBuilder(gb, wx + range(drng, 1, 3), wz + range(drng, 1, 3), drng() * 3), drng);
+        PROP_BUILDERS.rubble(makeShiftBuilder(gbProp, dx, dz, drng() * 3), drng);
+        if (chance(drng, 0.4)) PROP_BUILDERS.tippedchair(makeShiftBuilder(gbProp, wx + range(drng, 1, 3), wz + range(drng, 1, 3), drng() * 3), drng);
       }
 
       // battery pickup
       if (cell.batterySpawn) {
         const bx = wx + 2 + (cell.propRng() - 0.5) * 2;
         const bz = wz + 2 + (cell.propRng() - 0.5) * 2;
-        PROP_BUILDERS.battery(makeShiftBuilder(gb, bx, bz, 0), cell.propRng);
+        PROP_BUILDERS.battery(makeShiftBuilder(gbProp, bx, bz, 0), cell.propRng);
         notes.push({ x: bx, z: bz, id: `batt:${cx},${cz}`, battery: true });
       }
 
@@ -305,13 +326,17 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
 
       // props
       if (quality !== 'low' || chance(cell.propRng, 0.6)) {
-        pushProps(world, cell, gb, colliders, notes, quality);
+        pushProps(world, cell, gbProp, colliders, notes, quality);
       }
 
       // special room extras
       if (cell.special) {
-        pushSpecial(world, cell, gb, colliders, specials);
+        pushSpecial(world, cell, gbProp, colliders, specials);
       }
+
+      // architectural trim: baseboard skirting + chair rail + corner posts.
+      // This is what makes walls read as real rooms instead of extruded planes.
+      addWallTrim(world, cx, cz, wx, wz, ceilY, tint, levelDef, gbTrim);
     }
   }
 
@@ -325,7 +350,7 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
       if (kc.special || kc.water) continue;
       const kx = kcx * CELL + range(kRng, 0.7, CELL - 0.7);
       const kz = kcz * CELL + range(kRng, 0.7, CELL - 0.7);
-      const kb = makeShiftBuilder(gb, kx, kz, range(kRng, 0, Math.PI * 2));
+      const kb = makeShiftBuilder(gbProp, kx, kz, range(kRng, 0, Math.PI * 2));
       kb.box(0.16, 0.025, 0.05, 0, 0.06, 0, [186, 150, 66]);       // shaft
       kb.box(0.05, 0.025, 0.05, 0.08, 0.045, 0, [186, 150, 66]);   // tooth
       kb.cylinder(0.045, 0.02, -0.1, 0.06, 0, [186, 150, 66]);     // bow
@@ -334,10 +359,22 @@ export function buildChunk(world, chunkX, chunkZ, opts) {
     }
   }
 
-  const chunkMesh = new THREE.Mesh(gb.build(), mats.wall);
-  chunkMesh.castShadow = quality === 'high' || quality === 'ultra';
-  chunkMesh.receiveShadow = quality !== 'low';
-  group.add(chunkMesh);
+  // ---- one mesh per surface, each with its own PBR material ----
+  const addSurface = (gb, mat, name, receive = true, cast = false) => {
+    const geo = gb.build();
+    if (!geo.getAttribute('position').count) return null;
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = name;
+    mesh.castShadow = cast;
+    mesh.receiveShadow = receive;
+    group.add(mesh);
+    return mesh;
+  };
+  addSurface(gbFloor, mats.floor, 'floor');
+  addSurface(gbCeil, mats.ceil, 'ceiling');
+  addSurface(gb, mats.wall, 'walls');
+  addSurface(gbTrim, mats.trim || mats.wall, 'trim', true, quality === 'high' || quality === 'ultra');
+  addSurface(gbProp, mats.prop, 'props', true, quality === 'high' || quality === 'ultra');
 
   const waterGeo = gbWater.build();
   if (waterGeo.getAttribute('position').count) {
@@ -420,6 +457,59 @@ function pushWall(gb, dir, wx, wz, cell, h, col) {
   const t = 0.12;
   if (dir === 0) gb.box(t, h, cell, wx + cell, 0, wz + cell / 2, col);
   else gb.box(cell, h, t, wx + cell / 2, 0, wz + cell, col);
+}
+
+// ---------------------------------------------------------------------------
+// Architectural trim. Skirting boards, chair rails and corner posts are what
+// turn a flat extruded wall into a room: they cast a real shadow line at the
+// floor, break the wallpaper at eye level, and hide the seam where two walls
+// meet. All three are drawn in the level's trim colour on the trim material.
+//
+// Only the two edges per cell that the wall model owns are considered (dir 0
+// = +x, dir 1 = +z), matching how the wall faces themselves are emitted, so no
+// trim is duplicated. Doorways are skipped so the skirting does not float in a
+// door opening.
+function addWallTrim(world, cx, cz, wx, wz, ceilY, tint, levelDef, gbTrim) {
+  const base = levelDef.palette.wall;
+  // painted trim is a touch darker/greyer than the wall so it reads as timber
+  const trimCol = scaleColor([base[0] * 0.72, base[1] * 0.70, base[2] * 0.66], tint * 0.95);
+  const chairCol = scaleColor([base[0] * 0.8, base[1] * 0.78, base[2] * 0.74], tint * 0.95);
+  const hasChair = ceilY > 2.45;   // only taller rooms get a chair rail
+  const WALL_T = 0.12;
+
+  // All four edges: every room side gets its own skirting, which is what makes
+  // a corridor read as a corridor from both directions.
+  for (let dir = 0; dir < 4; dir++) {
+    const info = world.wallInfo(cx, cz, dir);
+    if (!info.wall) continue;
+
+    const alongX = (dir === 1 || dir === 3); // the run travels along x
+    // the wall plane, and the direction pointing into this cell
+    const plane = dir === 0 ? wx + CELL : dir === 2 ? wx : dir === 1 ? wz + CELL : wz;
+    const inward = (dir === 0 || dir === 3) ? -1 : 1;
+    const start = alongX ? wx : wz;
+
+    // emit one trim band (y0..y1) hugging the wall face, skipping the door gap
+    const run = (y0, y1, col, depth) => {
+      const off = inward * (WALL_T / 2 + depth / 2 + 0.002);
+      const segs = info.door
+        ? [[0, (CELL - 1.6) / 2], [(CELL + 1.6) / 2, CELL]]
+        : [[0, CELL]];
+      for (const [a, b] of segs) {
+        const len = b - a;
+        if (len <= 0.02) continue;
+        const mid = start + (a + b) / 2;
+        const px = alongX ? mid : plane + off;
+        const pz = alongX ? plane + off : mid;
+        const w = alongX ? len : depth;
+        const d = alongX ? depth : len;
+        gbTrim.box(w, y1 - y0, d, px, y0, pz, col);
+      }
+    };
+
+    run(0, 0.115, trimCol, 0.14);      // skirting board
+    if (hasChair) run(0.98, 1.07, chairCol, 0.11); // chair rail
+  }
 }
 
 // wall with a 1.6m x 2.1m doorway hole

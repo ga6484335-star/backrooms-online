@@ -9,6 +9,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 const VHSShader = {
   uniforms: {
@@ -129,6 +130,28 @@ export class RendererEngine {
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(72, 1, 0.08, 220);
+
+    // Image-based lighting. A dim, pre-filtered environment gives the metal,
+    // glazed tile and water surfaces something to reflect — without it every
+    // specular surface renders flat and grey.
+    //
+    // Kept low on purpose. Ambient light + IBL fill from every direction, so
+    // they add a constant term that does not vary with the surface normal —
+    // which is exactly what washes out normal-map relief. Measured on a lit
+    // wall, halving ambient/IBL roughly doubles visible surface contrast, so
+    // the fluorescent fixtures are left to do the directional work.
+    this.envRT = null;
+    try {
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      const envScene = new RoomEnvironment();
+      this.envRT = pmrem.fromScene(envScene, 0.04);
+      this.scene.environment = this.envRT.texture;
+      this.scene.environmentIntensity = 0.14;
+      envScene.traverse((o) => { if (o.isMesh) o.geometry.dispose(); });
+      pmrem.dispose();
+    } catch (e) {
+      console.warn('IBL unavailable:', e.message);
+    }
 
     this.composer = new EffectComposer(this.renderer);
     this.renderPass = new RenderPass(this.scene, this.camera);

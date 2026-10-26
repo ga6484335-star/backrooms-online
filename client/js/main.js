@@ -449,6 +449,14 @@ function startGame(seed, level) {
   gameState = 'playing';
   menu.hideAll();
 
+  // visual-QA hook: ?seed=<n> forces a known world so screenshots are
+  // reproducible. Opt-in only; without the param the room seed is used.
+  const seedParam = new URLSearchParams(location.search).get('seed');
+  if (seedParam !== null && seedParam !== '' && Number.isFinite(Number(seedParam))) {
+    seed = Number(seedParam) >>> 0;
+    console.warn(`[qa] world seed overridden to ${seed}`);
+  }
+
   // world
   world = new WorldModel(seed, level);
   worldMgr = new WorldManager(scene, world, settings.quality);
@@ -1446,6 +1454,21 @@ window.__dbg = {
   pos: () => [player.pos.x, player.pos.y, player.pos.z],
   player,
   state: () => ({ gameState, dead, paused, sitting: player.sitting, grounded: player.grounded, yOff: player.yOff }),
+  // camera state for visual QA: roll is the bank angle in degrees
+  cam: () => ({
+    yaw: +player.yaw.toFixed(4),
+    pitch: +player.pitch.toFixed(4),
+    rollDeg: +(player.camera.rotation.z * 180 / Math.PI).toFixed(3),
+    turnRollDeg: +(player.turnRoll * 180 / Math.PI).toFixed(3),
+    strafeLeanDeg: +(player.strafeLean * 180 / Math.PI).toFixed(3),
+    yawVel: +player.yawVel.toFixed(3),
+    pos: [+player.camera.position.x.toFixed(3), +player.camera.position.y.toFixed(3), +player.camera.position.z.toFixed(3)],
+  }),
+  setYaw: (y) => { player.yaw = player.yawTarget = y; },
+  look: (dx, dy) => { player.debugLook(dx, dy); },
+  seed: () => (world ? world.seed : null),
+  scene: () => scene,
+  engine: () => engine,
   level: () => (world ? world.level : -1),
   objectives: () => (objectives ? {
     activated: [...objectives.activated],
