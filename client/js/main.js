@@ -113,14 +113,16 @@ function loadSettings() {
     settings = {
       quality: s.quality || defaultQuality(),
       sens: s.sens || 1,
+      tilt: s.tilt !== undefined ? s.tilt : 1.0,
       volume: s.volume !== undefined ? s.volume : 0.8,
       vhs: s.vhs !== undefined ? !!s.vhs : true,
     };
   } catch (e) {
-    settings = { quality: defaultQuality(), sens: 1, volume: 0.8, vhs: true };
+    settings = { quality: defaultQuality(), sens: 1, tilt: 1.0, volume: 0.8, vhs: true };
   }
   E('set-quality').value = settings.quality;
   E('set-sens').value = settings.sens;
+  E('set-tilt').value = settings.tilt;
   E('set-volume').value = settings.volume;
   E('set-vhs').value = settings.vhs ? '1' : '0';
   applySettings(settings);
@@ -131,6 +133,7 @@ function applySettings(s) {
   engine.setQuality(s.quality);
   engine.setVHS(s.vhs);
   player.sensitivity = s.sens;
+  player.tiltStrength = s.tilt !== undefined ? s.tilt : 1.0;
   audio.setVolume(s.volume);
   if (worldMgr) worldMgr.setQuality(s.quality);
   if (lightMgr) lightMgr.setQuality(s.quality);

@@ -36,6 +36,7 @@ export class PlayerController {
     this.turnRoll = 0;      // current roll contributed by turning (rad)
     this.strafeLean = 0;    // current roll contributed by strafing (rad)
     this.prevYaw = 0;
+    this.tiltStrength = 1.0; // multiplier on turn-roll / lean, set by the CAMERA TILT setting
     this.speedSmooth = 0;
     this.shake = 0;            // external trauma (monster near, caught)
     this.focusT = 0;           // focus hunting phase
@@ -260,31 +261,33 @@ export class PlayerController {
     const swayRoll = (Math.sin(t * 0.47 + 4) * 0.3 + Math.sin(t * 1.9 + 1) * 0.2) * 0.008;
 
     // ---- turn roll + head lean ----
-    // The camera banks into a turn the way a head does: turning left rolls the
-    // view left (negative z-rotation in this YXZ convention), and it settles
-    // back to level when the turn stops. Roll is driven by *smoothed* yaw
-    // velocity so a flick of the mouse produces a fast, visible bank, while a
-    // slow sweep produces a gentle one.
+    // The camera banks INTO a turn the way a rider leans into a corner:
+    // turning left tips the top of the view left. Sign convention here: with
+    // rotation.order 'YXZ', a POSITIVE z-rotation tips the camera's up vector
+    // toward its own left, and turning left increases yaw (desktop mouse:
+    // yawTarget -= movementX * s, and movementX < 0 when you move left). So a
+    // left turn gives yawVel > 0 and needs a POSITIVE roll. (An earlier version
+    // negated it, which leaned the camera out of every turn — the opposite of
+    // the strafe lean below, and of what the comment claimed.)
     //
-    // TURN_RATE_REF is the angular rate that already maps to FULL bank. It is
-    // deliberately low: at the previous value (1.6 rad/s) a normal turn only
-    // reached ~4.5 of the 7 degrees, so the effect was barely perceptible in
-    // ordinary play and only saturated on a violent flick. At 0.85 rad/s an
-    // ordinary turn banks fully, which is what makes it readable.
+    // TURN_RATE_REF is the yaw rate that already maps to full bank. Ordinary
+    // turns sit around 0.5-1.2 rad/s, so 0.7 rad/s reaches full bank on a
+    // normal turn instead of only on a violent flick.
     let dyaw = this.yaw - this.prevYaw;
     if (dyaw > Math.PI) dyaw -= Math.PI * 2; else if (dyaw < -Math.PI) dyaw += Math.PI * 2;
     this.prevYaw = this.yaw;
     const yawRate = dt > 0 ? THREE.MathUtils.clamp(dyaw / dt, -10, 10) : 0;
     // smooth the rate so single-frame mouse spikes do not snap the horizon
     this.yawVel += (yawRate - this.yawVel) * Math.min(1, dt * 13);
-    const TURN_ROLL_MAX = 0.14;    // 8 degrees at full bank
-    const TURN_RATE_REF = 0.85;    // rad/s that maps to full roll (a normal turn)
-    const targetTurnRoll = -THREE.MathUtils.clamp(this.yawVel / TURN_RATE_REF, -1, 1) * TURN_ROLL_MAX;
+    const TURN_ROLL_MAX = 0.26;    // 15 degrees at full bank, before the setting
+    const TURN_RATE_REF = 0.7;     // rad/s that maps to full roll (a normal turn)
+    const tilt = this.tiltStrength;
+    const targetTurnRoll = THREE.MathUtils.clamp(this.yawVel / TURN_RATE_REF, -1, 1) * TURN_ROLL_MAX * tilt;
     this.turnRoll += (targetTurnRoll - this.turnRoll) * Math.min(1, dt * 10);
 
     // strafe lean: a small roll toward the direction of lateral travel
     const localRight = (this.vel.x * cos - this.vel.z * sin);
-    const targetLean = -THREE.MathUtils.clamp(localRight / RUN, -1, 1) * 0.05; // ~2.9 deg
+    const targetLean = -THREE.MathUtils.clamp(localRight / RUN, -1, 1) * 0.06 * tilt; // ~3.4 deg
     this.strafeLean += (targetLean - this.strafeLean) * Math.min(1, dt * 4);
 
     // micro shake
@@ -313,8 +316,9 @@ export class PlayerController {
 
     // camera placement (camera is world-anchored; player group is for avatar)
     const eyeH = this.eyeHeight();
-    // head lean: the eye shifts slightly toward the inside of the turn
-    const leanX = Math.sin(this.turnRoll) * 0.06 + Math.sin(this.strafeLean) * 0.03;
+    // head lean: the eye shifts slightly into the turn (turnRoll > 0 = left
+    // turn, so shift toward -X, which is the camera's left when yaw = 0)
+    const leanX = (-Math.sin(this.turnRoll) * 0.10 + Math.sin(this.strafeLean) * 0.04);
     this.camera.position.set(
       this.pos.x + bobX * 0.3 + leanX,
       eyeH + this.yOff + bobY + Math.sin(t * 0.8) * 0.004 - this.landDip,

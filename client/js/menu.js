@@ -75,6 +75,7 @@ export class MenuUI {
       const s = JSON.parse(localStorage.getItem('br_settings') || '{}');
       if (s.quality) E('set-quality').value = s.quality;
       if (s.sens) E('set-sens').value = s.sens;
+      if (s.tilt !== undefined) E('set-tilt').value = s.tilt;
       if (s.volume !== undefined) E('set-volume').value = s.volume;
       if (s.vhs !== undefined) E('set-vhs').value = String(s.vhs);
       if (s.name) E('name-input').value = s.name;
@@ -96,6 +97,7 @@ export class MenuUI {
     return {
       quality: E('set-quality').value,
       sens: parseFloat(E('set-sens').value),
+      tilt: parseFloat(E('set-tilt').value),
       volume: parseFloat(E('set-volume').value),
       vhs: E('set-vhs').value === '1',
     };
