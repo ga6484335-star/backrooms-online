@@ -264,17 +264,23 @@ export class PlayerController {
     // view left (negative z-rotation in this YXZ convention), and it settles
     // back to level when the turn stops. Roll is driven by *smoothed* yaw
     // velocity so a flick of the mouse produces a fast, visible bank, while a
-    // slow sweep produces a gentle one. Peak is ~7 degrees during a fast turn.
+    // slow sweep produces a gentle one.
+    //
+    // TURN_RATE_REF is the angular rate that already maps to FULL bank. It is
+    // deliberately low: at the previous value (1.6 rad/s) a normal turn only
+    // reached ~4.5 of the 7 degrees, so the effect was barely perceptible in
+    // ordinary play and only saturated on a violent flick. At 0.85 rad/s an
+    // ordinary turn banks fully, which is what makes it readable.
     let dyaw = this.yaw - this.prevYaw;
     if (dyaw > Math.PI) dyaw -= Math.PI * 2; else if (dyaw < -Math.PI) dyaw += Math.PI * 2;
     this.prevYaw = this.yaw;
     const yawRate = dt > 0 ? THREE.MathUtils.clamp(dyaw / dt, -10, 10) : 0;
     // smooth the rate so single-frame mouse spikes do not snap the horizon
-    this.yawVel += (yawRate - this.yawVel) * Math.min(1, dt * 9);
-    const TURN_ROLL_MAX = 0.122;   // ~7 degrees at full bank
-    const TURN_RATE_REF = 1.6;     // rad/s that maps to full roll (a brisk turn)
+    this.yawVel += (yawRate - this.yawVel) * Math.min(1, dt * 13);
+    const TURN_ROLL_MAX = 0.14;    // 8 degrees at full bank
+    const TURN_RATE_REF = 0.85;    // rad/s that maps to full roll (a normal turn)
     const targetTurnRoll = -THREE.MathUtils.clamp(this.yawVel / TURN_RATE_REF, -1, 1) * TURN_ROLL_MAX;
-    this.turnRoll += (targetTurnRoll - this.turnRoll) * Math.min(1, dt * 7);
+    this.turnRoll += (targetTurnRoll - this.turnRoll) * Math.min(1, dt * 10);
 
     // strafe lean: a small roll toward the direction of lateral travel
     const localRight = (this.vel.x * cos - this.vel.z * sin);
