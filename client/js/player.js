@@ -270,9 +270,11 @@ export class PlayerController {
     // negated it, which leaned the camera out of every turn — the opposite of
     // the strafe lean below, and of what the comment claimed.)
     //
-    // TURN_RATE_REF is the yaw rate that already maps to full bank. Ordinary
-    // turns sit around 0.5-1.2 rad/s, so 0.7 rad/s reaches full bank on a
-    // normal turn instead of only on a violent flick.
+    // TURN_RATE_REF is the yaw rate that already maps to full bank. The two
+    // input paths produce very different rates for a comparable "normal" turn:
+    // a mouse sweep reaches ~0.7-2 rad/s, while a touch drag on the look zone
+    // only reaches ~0.45-0.97 rad/s (measured on an emulated iPhone). A single
+    // reference therefore under-banked touch look, so mobile gets a lower one.
     let dyaw = this.yaw - this.prevYaw;
     if (dyaw > Math.PI) dyaw -= Math.PI * 2; else if (dyaw < -Math.PI) dyaw += Math.PI * 2;
     this.prevYaw = this.yaw;
@@ -280,7 +282,7 @@ export class PlayerController {
     // smooth the rate so single-frame mouse spikes do not snap the horizon
     this.yawVel += (yawRate - this.yawVel) * Math.min(1, dt * 13);
     const TURN_ROLL_MAX = 0.26;    // 15 degrees at full bank, before the setting
-    const TURN_RATE_REF = 0.7;     // rad/s that maps to full roll (a normal turn)
+    const TURN_RATE_REF = this.mobile ? 0.45 : 0.7;
     const tilt = this.tiltStrength;
     const targetTurnRoll = THREE.MathUtils.clamp(this.yawVel / TURN_RATE_REF, -1, 1) * TURN_ROLL_MAX * tilt;
     this.turnRoll += (targetTurnRoll - this.turnRoll) * Math.min(1, dt * 10);
